@@ -15,6 +15,7 @@ import {
   greetV1,
   healthV1,
   isCommandErrorV1,
+  listSubstancesV1,
   normalizeCommandErrorV1,
   resolveFeatureFlagsV1,
   toUserFacingMessageV1,
@@ -129,6 +130,81 @@ describe("ipc v1 client", () => {
     });
 
     expect(invokeMock).toHaveBeenCalledWith(IPC_COMMANDS_V1.getFeatureFlags);
+  });
+
+  it("invokes query_substances_v1 with empty input and normalizes source/field aliases", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-library",
+      substances: [
+        {
+          id: "builtin-substance-hydrogen",
+          name: "Hydrogen",
+          formula: "H2",
+          phaseDefault: "gas",
+          sourceType: "builtin",
+          molarMassGMol: 2.01588,
+        },
+        {
+          id: "custom-substance-1",
+          name: "Methane",
+          formula: "CH4",
+          phase_default: "gas",
+          source_type: "user_defined",
+          molar_mass_g_mol: 16.0425,
+        },
+      ],
+    });
+
+    await expect(listSubstancesV1()).resolves.toEqual({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-library",
+      substances: [
+        {
+          id: "builtin-substance-hydrogen",
+          name: "Hydrogen",
+          formula: "H2",
+          phase: "gas",
+          source: "builtin",
+          molarMassGMol: 2.01588,
+        },
+        {
+          id: "custom-substance-1",
+          name: "Methane",
+          formula: "CH4",
+          phase: "gas",
+          source: "user",
+          molarMassGMol: 16.0425,
+        },
+      ],
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith(IPC_COMMANDS_V1.listSubstances, {
+      input: {},
+    });
+  });
+
+  it("rejects query_substances_v1 payloads with invalid records", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-library-invalid",
+      substances: [
+        {
+          id: "broken-substance",
+          name: "Broken",
+          formula: "Br",
+          phase: "plasma",
+          source: "builtin",
+        },
+      ],
+    });
+
+    await expect(listSubstancesV1()).rejects.toMatchObject({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-library-invalid",
+      category: "internal",
+      code: "INVALID_SUBSTANCE_PAYLOAD",
+    });
   });
 
   it("resolves feature flags from backend values when available", async () => {

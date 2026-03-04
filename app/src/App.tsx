@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AppShell from "./app/layout/AppShell";
 import reactLogo from "./assets/react.svg";
 import CenterPanelSkeleton, {
@@ -8,7 +8,11 @@ import CenterPanelSkeleton, {
 import LeftPanelSkeleton from "./features/left-panel/LeftPanelSkeleton";
 import {
   DEFAULT_LEFT_PANEL_TAB,
+  LIBRARY_PHASE_FILTER_OPTIONS,
+  LIBRARY_SOURCE_FILTER_OPTIONS,
+  filterLibrarySubstances,
   isLeftPanelTabId,
+  resolveSelectedLibrarySubstanceId,
   type LeftPanelPlaceholderState,
   type LeftPanelTabId,
 } from "./features/left-panel/model";
@@ -25,10 +29,16 @@ import {
   greetV1,
   healthV1,
   isCommandErrorV1,
+  listSubstancesV1,
   resolveFeatureFlagsV1,
   toUserFacingMessageV1,
 } from "./shared/contracts/ipc/client";
-import type { CommandErrorV1 } from "./shared/contracts/ipc/v1";
+import type {
+  CommandErrorV1,
+  SubstanceCatalogEntryV1,
+  SubstancePhaseV1,
+  SubstanceSourceV1,
+} from "./shared/contracts/ipc/v1";
 import {
   appendNotification,
   type AppNotification,
@@ -56,10 +66,10 @@ const FEATURE_KEYS: ReadonlyArray<FeatureFlagKey> = [
 
 const LEFT_PANEL_ACTIVE_TAB_STORAGE_KEY = "chemystery.leftPanel.activeTab.v1";
 
-const LEFT_PANEL_PLACEHOLDER_STATE_BY_TAB: Readonly<
+const LEFT_PANEL_STATIC_PLACEHOLDER_STATE_BY_TAB: Readonly<
   Record<LeftPanelTabId, LeftPanelPlaceholderState>
 > = {
-  library: "loading",
+  library: "ready",
   builder: "empty",
   presets: "error",
 };
@@ -124,6 +134,21 @@ function resolveSimulationState(state: CenterPanelControlState): string {
   return "Paused";
 }
 
+function toggleFilterValue<T extends string>(
+  currentSelection: ReadonlySet<T>,
+  value: T,
+): ReadonlySet<T> {
+  const nextSelection = new Set(currentSelection);
+
+  if (nextSelection.has(value)) {
+    nextSelection.delete(value);
+  } else {
+    nextSelection.add(value);
+  }
+
+  return nextSelection;
+}
+
 function App() {
   const [activeLeftPanelTab, setActiveLeftPanelTab] =
     useState<LeftPanelTabId>(readStoredLeftPanelTab);
@@ -138,6 +163,19 @@ function App() {
   );
   const [runtimeSettings, setRuntimeSettings] =
     useState<RightPanelRuntimeSettings>(DEFAULT_RUNTIME_SETTINGS);
+  const [allSubstances, setAllSubstances] = useState<ReadonlyArray<SubstanceCatalogEntryV1>>([]);
+  const [librarySearchQuery, setLibrarySearchQuery] = useState("");
+  const [selectedLibraryPhases, setSelectedLibraryPhases] = useState<ReadonlySet<SubstancePhaseV1>>(
+    () => new Set(LIBRARY_PHASE_FILTER_OPTIONS),
+  );
+  const [selectedLibrarySources, setSelectedLibrarySources] = useState<
+    ReadonlySet<SubstanceSourceV1>
+  >(() => new Set(LIBRARY_SOURCE_FILTER_OPTIONS));
+  const [selectedLibrarySubstanceId, setSelectedLibrarySubstanceId] = useState<string | null>(null);
+  const [libraryLoadState, setLibraryLoadState] = useState<"loading" | "ready" | "error">(
+    "loading",
+  );
+  const [libraryLoadError, setLibraryLoadError] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<ReadonlyArray<AppNotification>>([]);
   const notificationIdRef = useRef(0);
   const previousSimulationStateRef = useRef<string | null>(null);
@@ -219,6 +257,35 @@ function App() {
 
         const message = `Feature flag error: ${String(error)}`;
         setFeatureFlagsMsg(message);
+        enqueueNotification("error", message);
+      });
+
+    listSubstancesV1()
+      .then((result) => {
+        if (disposed) {
+          return;
+        }
+
+        setAllSubstances(result.substances);
+        setLibraryLoadState("ready");
+        setLibraryLoadError(null);
+      })
+      .catch((error: unknown) => {
+        if (disposed) {
+          return;
+        }
+
+        if (isCommandErrorV1(error)) {
+          const message = `Library error: ${formatCommandError(error)}`;
+          setLibraryLoadError(message);
+          setLibraryLoadState("error");
+          enqueueNotification("error", message);
+          return;
+        }
+
+        const message = `Library error: ${String(error)}`;
+        setLibraryLoadError(message);
+        setLibraryLoadState("error");
         enqueueNotification("error", message);
       });
 
@@ -310,6 +377,64 @@ function App() {
     return enabled ? "available" : "unavailable";
   }
 
+  const filteredLibrarySubstances = useMemo(
+    () =>
+      filterLibrarySubstances(
+        allSubstances,
+        librarySearchQuery,
+        selectedLibraryPhases,
+        selectedLibrarySources,
+      ),
+    [allSubstances, librarySearchQuery, selectedLibraryPhases, selectedLibrarySources],
+  );
+
+  const resolvedSelectedLibrarySubstanceId = useMemo(
+    () => resolveSelectedLibrarySubstanceId(selectedLibrarySubstanceId, filteredLibrarySubstances),
+    [filteredLibrarySubstances, selectedLibrarySubstanceId],
+  );
+
+  const selectedLibrarySubstance = useMemo(
+    () =>
+      filteredLibrarySubstances.find(
+        (substance) => substance.id === resolvedSelectedLibrarySubstanceId,
+      ) ?? null,
+    [filteredLibrarySubstances, resolvedSelectedLibrarySubstanceId],
+  );
+
+  const libraryPlaceholderState: LeftPanelPlaceholderState = useMemo(() => {
+    if (libraryLoadState === "loading") {
+      return "loading";
+    }
+
+    if (libraryLoadState === "error") {
+      return "error";
+    }
+
+    return filteredLibrarySubstances.length === 0 ? "empty" : "ready";
+  }, [filteredLibrarySubstances.length, libraryLoadState]);
+
+  const placeholderStateByTab: Readonly<Record<LeftPanelTabId, LeftPanelPlaceholderState>> =
+    useMemo(
+      () => ({
+        ...LEFT_PANEL_STATIC_PLACEHOLDER_STATE_BY_TAB,
+        library: libraryPlaceholderState,
+      }),
+      [libraryPlaceholderState],
+    );
+
+  const libraryEmptyMessage =
+    allSubstances.length === 0
+      ? "No substances are available in the local catalog."
+      : "No substances match the current search and filters.";
+
+  const handleLibraryPhaseToggle = useCallback((phase: SubstancePhaseV1): void => {
+    setSelectedLibraryPhases((currentSelection) => toggleFilterValue(currentSelection, phase));
+  }, []);
+
+  const handleLibrarySourceToggle = useCallback((source: SubstanceSourceV1): void => {
+    setSelectedLibrarySources((currentSelection) => toggleFilterValue(currentSelection, source));
+  }, []);
+
   const rightPanelFeatureStatuses: ReadonlyArray<RightPanelFeatureStatus> = FEATURE_KEYS.map(
     (feature) => ({
       id: feature,
@@ -334,7 +459,20 @@ function App() {
           <LeftPanelSkeleton
             activeTab={activeLeftPanelTab}
             onTabChange={setActiveLeftPanelTab}
-            placeholderStateByTab={LEFT_PANEL_PLACEHOLDER_STATE_BY_TAB}
+            placeholderStateByTab={placeholderStateByTab}
+            libraryViewModel={{
+              searchQuery: librarySearchQuery,
+              onSearchQueryChange: setLibrarySearchQuery,
+              selectedPhases: selectedLibraryPhases,
+              selectedSources: selectedLibrarySources,
+              onTogglePhase: handleLibraryPhaseToggle,
+              onToggleSource: handleLibrarySourceToggle,
+              substances: filteredLibrarySubstances,
+              selectedSubstance: selectedLibrarySubstance,
+              onSelectSubstance: setSelectedLibrarySubstanceId,
+              emptyMessage: libraryEmptyMessage,
+              errorMessage: libraryLoadError,
+            }}
           />
         }
         centerPanel={

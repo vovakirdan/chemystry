@@ -1,5 +1,13 @@
 import type { ReactNode } from "react";
-import type { LeftPanelPlaceholderState, LeftPanelTabId } from "./model";
+import type { SubstanceCatalogEntryV1 } from "../../shared/contracts/ipc/v1";
+import {
+  LIBRARY_PHASE_FILTER_OPTIONS,
+  LIBRARY_SOURCE_FILTER_OPTIONS,
+  formatLibraryPhaseLabel,
+  formatLibrarySourceLabel,
+  type LeftPanelPlaceholderState,
+  type LeftPanelTabId,
+} from "./model";
 
 type LeftPanelTabDefinition = {
   id: LeftPanelTabId;
@@ -8,10 +16,25 @@ type LeftPanelTabDefinition = {
   description: string;
 };
 
+type LeftPanelLibraryViewModel = {
+  searchQuery: string;
+  onSearchQueryChange: (value: string) => void;
+  selectedPhases: ReadonlySet<(typeof LIBRARY_PHASE_FILTER_OPTIONS)[number]>;
+  selectedSources: ReadonlySet<(typeof LIBRARY_SOURCE_FILTER_OPTIONS)[number]>;
+  onTogglePhase: (phase: (typeof LIBRARY_PHASE_FILTER_OPTIONS)[number]) => void;
+  onToggleSource: (source: (typeof LIBRARY_SOURCE_FILTER_OPTIONS)[number]) => void;
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>;
+  selectedSubstance: SubstanceCatalogEntryV1 | null;
+  onSelectSubstance: (substanceId: string) => void;
+  emptyMessage: string;
+  errorMessage: string | null;
+};
+
 type LeftPanelSkeletonProps = {
   activeTab: LeftPanelTabId;
   onTabChange: (tab: LeftPanelTabId) => void;
   placeholderStateByTab: Readonly<Record<LeftPanelTabId, LeftPanelPlaceholderState>>;
+  libraryViewModel: LeftPanelLibraryViewModel;
 };
 
 const LEFT_PANEL_TAB_DEFINITIONS: ReadonlyArray<LeftPanelTabDefinition> = [
@@ -19,7 +42,7 @@ const LEFT_PANEL_TAB_DEFINITIONS: ReadonlyArray<LeftPanelTabDefinition> = [
     id: "library",
     label: "Library",
     title: "Substance Library",
-    description: "Container boundary for searchable compounds and category metadata.",
+    description: "Search local substances and inspect key properties for quick setup.",
   },
   {
     id: "builder",
@@ -83,15 +106,212 @@ function renderPlaceholder(
           </p>
         </div>
       );
+    case "ready":
+      return null;
     default:
       return null;
   }
+}
+
+function formatMolarMass(value: number | null): string {
+  if (value === null) {
+    return "Unknown";
+  }
+
+  return `${value.toFixed(5)} g/mol`;
+}
+
+function renderLibraryState(
+  state: LeftPanelPlaceholderState,
+  emptyMessage: string,
+  errorMessage: string | null,
+): ReactNode {
+  if (state === "loading") {
+    return (
+      <div
+        className="left-panel-placeholder left-panel-placeholder--loading"
+        data-testid="library-state-loading"
+      >
+        <h4 className="left-panel-placeholder-title">Loading substances</h4>
+        <p className="left-panel-placeholder-text">Querying local catalog command payload.</p>
+      </div>
+    );
+  }
+
+  if (state === "error") {
+    return (
+      <div
+        className="left-panel-placeholder left-panel-placeholder--error"
+        role="alert"
+        data-testid="library-state-error"
+      >
+        <h4 className="left-panel-placeholder-title">Unable to load substance catalog</h4>
+        <p className="left-panel-placeholder-text">
+          {errorMessage ?? "Retry when backend is available."}
+        </p>
+      </div>
+    );
+  }
+
+  if (state === "empty") {
+    return (
+      <div
+        className="left-panel-placeholder left-panel-placeholder--empty"
+        data-testid="library-state-empty"
+      >
+        <h4 className="left-panel-placeholder-title">No substances to display</h4>
+        <p className="left-panel-placeholder-text">{emptyMessage}</p>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function renderLibraryResults(libraryViewModel: LeftPanelLibraryViewModel): ReactNode {
+  const { selectedSubstance, substances } = libraryViewModel;
+
+  return (
+    <div className="left-panel-library-results" data-testid="library-results">
+      <ul className="left-panel-library-list" data-testid="library-substance-list">
+        {substances.map((substance) => {
+          const isSelected = selectedSubstance?.id === substance.id;
+          const label = `${substance.name} (${substance.formula})`;
+
+          return (
+            <li key={substance.id} className="left-panel-library-list-item">
+              <button
+                type="button"
+                className="left-panel-library-item-button"
+                aria-selected={isSelected}
+                data-testid={`library-substance-select-${substance.id}`}
+                onClick={() => libraryViewModel.onSelectSubstance(substance.id)}
+              >
+                <span className="left-panel-library-item-name">{label}</span>
+                <span className="left-panel-library-item-meta">
+                  {formatLibraryPhaseLabel(substance.phase)} /{" "}
+                  {formatLibrarySourceLabel(substance.source)}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+
+      <article className="left-panel-library-card" data-testid="library-property-card">
+        {selectedSubstance === null ? (
+          <p className="left-panel-placeholder-text">Select a substance to view properties.</p>
+        ) : (
+          <>
+            <h4 className="left-panel-library-card-title" data-testid="library-property-name">
+              {selectedSubstance.name}
+            </h4>
+            <p className="left-panel-library-card-subtitle" data-testid="library-property-formula">
+              {selectedSubstance.formula}
+            </p>
+            <dl className="left-panel-library-card-grid">
+              <div>
+                <dt>Phase</dt>
+                <dd>{formatLibraryPhaseLabel(selectedSubstance.phase)}</dd>
+              </div>
+              <div>
+                <dt>Source</dt>
+                <dd>{formatLibrarySourceLabel(selectedSubstance.source)}</dd>
+              </div>
+              <div>
+                <dt>Molar mass</dt>
+                <dd>{formatMolarMass(selectedSubstance.molarMassGMol)}</dd>
+              </div>
+            </dl>
+          </>
+        )}
+      </article>
+    </div>
+  );
+}
+
+function renderLibraryView(
+  state: LeftPanelPlaceholderState,
+  libraryViewModel: LeftPanelLibraryViewModel,
+): ReactNode {
+  const controlsDisabled = state === "loading";
+  const stateContent = renderLibraryState(
+    state,
+    libraryViewModel.emptyMessage,
+    libraryViewModel.errorMessage,
+  );
+
+  return (
+    <div className="left-panel-library-view" data-testid="left-panel-library-view">
+      <div className="left-panel-library-search">
+        <label htmlFor="library-search-input">Search by name or formula</label>
+        <input
+          id="library-search-input"
+          type="search"
+          value={libraryViewModel.searchQuery}
+          onChange={(event) => libraryViewModel.onSearchQueryChange(event.currentTarget.value)}
+          placeholder="e.g. water, H2O"
+          data-testid="library-search-input"
+          disabled={controlsDisabled}
+        />
+      </div>
+
+      <div className="left-panel-library-filter-row">
+        <fieldset
+          className="left-panel-library-filter-group"
+          data-testid="library-filter-phase-group"
+          disabled={controlsDisabled}
+        >
+          <legend>Phase</legend>
+          {LIBRARY_PHASE_FILTER_OPTIONS.map((phase) => (
+            <label key={phase} className="left-panel-library-filter-option">
+              <input
+                type="checkbox"
+                checked={libraryViewModel.selectedPhases.has(phase)}
+                onChange={() => libraryViewModel.onTogglePhase(phase)}
+                data-testid={`library-filter-phase-${phase}`}
+              />
+              {formatLibraryPhaseLabel(phase)}
+            </label>
+          ))}
+        </fieldset>
+
+        <fieldset
+          className="left-panel-library-filter-group"
+          data-testid="library-filter-source-group"
+          disabled={controlsDisabled}
+        >
+          <legend>Source</legend>
+          {LIBRARY_SOURCE_FILTER_OPTIONS.map((source) => (
+            <label key={source} className="left-panel-library-filter-option">
+              <input
+                type="checkbox"
+                checked={libraryViewModel.selectedSources.has(source)}
+                onChange={() => libraryViewModel.onToggleSource(source)}
+                data-testid={`library-filter-source-${source}`}
+              />
+              {formatLibrarySourceLabel(source)}
+            </label>
+          ))}
+        </fieldset>
+      </div>
+
+      <div
+        className="left-panel-data-boundary"
+        aria-live="polite"
+        data-testid="left-panel-data-boundary-library"
+      >
+        {stateContent ?? renderLibraryResults(libraryViewModel)}
+      </div>
+    </div>
+  );
 }
 
 function LeftPanelSkeleton({
   activeTab,
   onTabChange,
   placeholderStateByTab,
+  libraryViewModel,
 }: LeftPanelSkeletonProps) {
   const activeDefinition = LEFT_PANEL_TAB_BY_ID[activeTab];
   const activePlaceholderState = placeholderStateByTab[activeTab];
@@ -152,13 +372,17 @@ function LeftPanelSkeleton({
           <p className="panel-description">{activeDefinition.description}</p>
         </header>
 
-        <div
-          className="left-panel-data-boundary"
-          aria-live="polite"
-          data-testid={`left-panel-data-boundary-${activeTab}`}
-        >
-          {renderPlaceholder(activeDefinition, activePlaceholderState)}
-        </div>
+        {activeTab === "library" ? (
+          renderLibraryView(activePlaceholderState, libraryViewModel)
+        ) : (
+          <div
+            className="left-panel-data-boundary"
+            aria-live="polite"
+            data-testid={`left-panel-data-boundary-${activeTab}`}
+          >
+            {renderPlaceholder(activeDefinition, activePlaceholderState)}
+          </div>
+        )}
       </section>
     </div>
   );

@@ -8,12 +8,18 @@ import {
 import {
   IPC_COMMANDS_V1,
   IPC_CONTRACT_VERSION_V1,
+  SUBSTANCE_PHASES_V1,
+  SUBSTANCE_SOURCES_V1,
   type CommandErrorCategoryV1,
   type CommandErrorV1,
   type GetFeatureFlagsV1Output,
   type GreetV1Input,
   type GreetV1Output,
   type HealthV1Output,
+  type ListSubstancesV1Output,
+  type SubstanceCatalogEntryV1,
+  type SubstancePhaseV1,
+  type SubstanceSourceV1,
 } from "./v1";
 
 const COMMAND_ERROR_CATEGORIES_V1: ReadonlySet<CommandErrorCategoryV1> = new Set([
@@ -28,6 +34,7 @@ const USER_MESSAGE_BY_CODE_V1: Record<string, string> = {
   NAME_REQUIRED: "Enter a name before greeting.",
   NAME_TOO_LONG: "Name must be 64 characters or fewer.",
   FEATURE_DISABLED: "This module is disabled by configuration.",
+  INVALID_SUBSTANCE_PAYLOAD: "Substance catalog data is invalid. Please retry.",
 };
 
 const USER_MESSAGE_BY_CATEGORY_V1: Record<CommandErrorCategoryV1, string> = {
@@ -47,6 +54,9 @@ export interface ResolvedFeatureFlagsV1 {
   warning?: string;
 }
 
+const SUBSTANCE_PHASE_SET_V1: ReadonlySet<SubstancePhaseV1> = new Set(SUBSTANCE_PHASES_V1);
+const SUBSTANCE_SOURCE_SET_V1: ReadonlySet<SubstanceSourceV1> = new Set(SUBSTANCE_SOURCES_V1);
+
 function nextClientRequestId(): string {
   clientRequestSequence += 1;
   return `req-client-${Date.now().toString(36)}-${clientRequestSequence.toString(36)}`;
@@ -63,6 +73,191 @@ function isFeatureFlags(value: unknown): value is FeatureFlags {
     typeof candidate.importExport === "boolean" &&
     typeof candidate.advancedPrecision === "boolean"
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function createInvalidSubstancePayloadError(
+  message: string,
+  requestId: string = nextClientRequestId(),
+): CommandErrorV1 {
+  return {
+    version: IPC_CONTRACT_VERSION_V1,
+    requestId,
+    category: "internal",
+    code: "INVALID_SUBSTANCE_PAYLOAD",
+    message,
+  };
+}
+
+function readFirstDefined(
+  candidate: Record<string, unknown>,
+  keys: ReadonlyArray<string>,
+): unknown {
+  for (const key of keys) {
+    if (candidate[key] !== undefined) {
+      return candidate[key];
+    }
+  }
+
+  return undefined;
+}
+
+function parseSubstancePhaseV1(value: unknown): SubstancePhaseV1 | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  return SUBSTANCE_PHASE_SET_V1.has(value as SubstancePhaseV1) ? (value as SubstancePhaseV1) : null;
+}
+
+function parseSubstanceSourceV1(value: unknown): SubstanceSourceV1 | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalizedSource = value === "user_defined" ? "user" : value;
+  return SUBSTANCE_SOURCE_SET_V1.has(normalizedSource as SubstanceSourceV1)
+    ? (normalizedSource as SubstanceSourceV1)
+    : null;
+}
+
+function parseSubstanceMolarMassV1(value: unknown): number | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function parseSubstanceEntryV1(
+  candidate: unknown,
+  requestId: string,
+  index: number,
+): SubstanceCatalogEntryV1 {
+  if (!isRecord(candidate)) {
+    throw createInvalidSubstancePayloadError(
+      `Substance at index ${index.toString()} is not an object.`,
+      requestId,
+    );
+  }
+
+  const id = candidate.id;
+  const name = candidate.name;
+  const formula = candidate.formula;
+  const phase = parseSubstancePhaseV1(
+    readFirstDefined(candidate, ["phase", "phaseDefault", "phase_default"]),
+  );
+  const source = parseSubstanceSourceV1(
+    readFirstDefined(candidate, ["source", "sourceType", "source_type"]),
+  );
+  const molarMass = parseSubstanceMolarMassV1(
+    readFirstDefined(candidate, [
+      "molarMassGMol",
+      "molarMassGmol",
+      "molar_mass_g_mol",
+      "molarMass",
+    ]),
+  );
+
+  if (typeof id !== "string" || id.length === 0) {
+    throw createInvalidSubstancePayloadError(
+      `Substance at index ${index.toString()} is missing a valid id.`,
+      requestId,
+    );
+  }
+
+  if (typeof name !== "string" || name.length === 0) {
+    throw createInvalidSubstancePayloadError(
+      `Substance "${id}" is missing a valid name.`,
+      requestId,
+    );
+  }
+
+  if (typeof formula !== "string" || formula.length === 0) {
+    throw createInvalidSubstancePayloadError(
+      `Substance "${id}" is missing a valid formula.`,
+      requestId,
+    );
+  }
+
+  if (phase === null) {
+    throw createInvalidSubstancePayloadError(
+      `Substance "${id}" has an unsupported phase value.`,
+      requestId,
+    );
+  }
+
+  if (source === null) {
+    throw createInvalidSubstancePayloadError(
+      `Substance "${id}" has an unsupported source value.`,
+      requestId,
+    );
+  }
+
+  const hasMolarMassField =
+    readFirstDefined(candidate, [
+      "molarMassGMol",
+      "molarMassGmol",
+      "molar_mass_g_mol",
+      "molarMass",
+    ]) !== undefined;
+
+  if (hasMolarMassField && molarMass === null) {
+    throw createInvalidSubstancePayloadError(
+      `Substance "${id}" has an invalid molar mass value.`,
+      requestId,
+    );
+  }
+
+  return {
+    id,
+    name,
+    formula,
+    phase,
+    source,
+    molarMassGMol: molarMass,
+  };
+}
+
+function parseListSubstancesV1Output(payload: unknown): ListSubstancesV1Output {
+  if (!isRecord(payload)) {
+    throw createInvalidSubstancePayloadError("Substances payload is not an object.");
+  }
+
+  const requestId =
+    typeof payload.requestId === "string" ? payload.requestId : nextClientRequestId();
+  if (payload.version !== IPC_CONTRACT_VERSION_V1) {
+    throw createInvalidSubstancePayloadError("Substances payload version is invalid.", requestId);
+  }
+
+  if (!Array.isArray(payload.substances)) {
+    throw createInvalidSubstancePayloadError(
+      "Substances payload is missing the substances list.",
+      requestId,
+    );
+  }
+
+  return {
+    version: IPC_CONTRACT_VERSION_V1,
+    requestId,
+    substances: payload.substances.map((candidate, index) =>
+      parseSubstanceEntryV1(candidate, requestId, index),
+    ),
+  };
 }
 
 function isCommandErrorCategoryV1(value: unknown): value is CommandErrorCategoryV1 {
@@ -141,6 +336,17 @@ export async function healthV1(): Promise<HealthV1Output> {
 export async function getFeatureFlagsV1(): Promise<GetFeatureFlagsV1Output> {
   try {
     return await invoke<GetFeatureFlagsV1Output>(IPC_COMMANDS_V1.getFeatureFlags);
+  } catch (error) {
+    throw normalizeCommandErrorV1(error);
+  }
+}
+
+export async function listSubstancesV1(): Promise<ListSubstancesV1Output> {
+  try {
+    const payload = await invoke<unknown>(IPC_COMMANDS_V1.listSubstances, {
+      input: {},
+    });
+    return parseListSubstancesV1Output(payload);
   } catch (error) {
     throw normalizeCommandErrorV1(error);
   }

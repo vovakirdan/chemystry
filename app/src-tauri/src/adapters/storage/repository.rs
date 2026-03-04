@@ -244,6 +244,53 @@ impl StorageRepository {
         Ok(substances)
     }
 
+    pub fn query_substances(
+        &self,
+        search: Option<&str>,
+        phase_filter: Option<&str>,
+        source_filter: Option<&str>,
+    ) -> Result<Vec<Substance>, StorageError> {
+        let connection = self.open()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT
+                    id,
+                    name,
+                    formula,
+                    smiles,
+                    molar_mass_g_mol,
+                    phase_default,
+                    source_type,
+                    created_at
+                FROM substance
+                WHERE (
+                    ?1 IS NULL
+                    OR instr(lower(name), lower(?1)) > 0
+                    OR instr(lower(formula), lower(?1)) > 0
+                )
+                AND (?2 IS NULL OR phase_default = ?2)
+                AND (?3 IS NULL OR source_type = ?3)
+                ORDER BY lower(name) ASC, lower(formula) ASC, id ASC",
+            )
+            .map_err(|error| self.sqlite_error("failed to prepare substance query", error))?;
+
+        let rows = statement
+            .query_map(
+                params![search, phase_filter, source_filter],
+                row_to_substance,
+            )
+            .map_err(|error| self.sqlite_error("failed to query substances", error))?;
+
+        let mut substances = Vec::new();
+        for row in rows {
+            substances.push(
+                row.map_err(|error| self.sqlite_error("failed to decode substance row", error))?,
+            );
+        }
+
+        Ok(substances)
+    }
+
     pub fn update_substance(
         &self,
         id: &str,
@@ -1446,6 +1493,94 @@ mod tests {
         assert!(repository
             .delete_substance("substance-test-1")
             .expect("substance delete should succeed"));
+    }
+
+    #[test]
+    fn query_substances_supports_search_and_filters() {
+        let temp_dir = TempDir::new().expect("must create temp directory");
+        let database_path = temp_dir.path().join("query-substances.sqlite3");
+
+        run_migrations(&database_path).expect("migrations should succeed");
+        let repository = StorageRepository::new(database_path);
+
+        repository
+            .create_substance(&NewSubstance {
+                id: "substance-methane".to_string(),
+                name: "Methane".to_string(),
+                formula: "CH4".to_string(),
+                smiles: Some("C".to_string()),
+                molar_mass_g_mol: 16.0425,
+                phase_default: "gas".to_string(),
+                source_type: "user_defined".to_string(),
+            })
+            .expect("must create methane");
+        repository
+            .create_substance(&NewSubstance {
+                id: "substance-hydrogen-peroxide".to_string(),
+                name: "Hydrogen peroxide".to_string(),
+                formula: "H2O2".to_string(),
+                smiles: Some("OO".to_string()),
+                molar_mass_g_mol: 34.0147,
+                phase_default: "liquid".to_string(),
+                source_type: "imported".to_string(),
+            })
+            .expect("must create hydrogen peroxide");
+        repository
+            .create_substance(&NewSubstance {
+                id: "substance-hydrogen".to_string(),
+                name: "Hydrogen".to_string(),
+                formula: "H2".to_string(),
+                smiles: None,
+                molar_mass_g_mol: 2.01588,
+                phase_default: "gas".to_string(),
+                source_type: "builtin".to_string(),
+            })
+            .expect("must create hydrogen");
+
+        let all_results = repository
+            .query_substances(None, None, None)
+            .expect("must query all substances");
+        let all_ids = all_results
+            .iter()
+            .map(|substance| substance.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            all_ids,
+            vec![
+                "substance-hydrogen",
+                "substance-hydrogen-peroxide",
+                "substance-methane"
+            ]
+        );
+
+        let search_results = repository
+            .query_substances(Some("h2"), None, None)
+            .expect("must query by case-insensitive formula search");
+        let search_ids = search_results
+            .iter()
+            .map(|substance| substance.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            search_ids,
+            vec!["substance-hydrogen", "substance-hydrogen-peroxide"]
+        );
+
+        let filtered_results = repository
+            .query_substances(Some("METH"), Some("gas"), Some("user_defined"))
+            .expect("must query by combined search and filters");
+        assert_eq!(filtered_results.len(), 1);
+        assert_eq!(filtered_results[0].id, "substance-methane");
+
+        let phase_source_results = repository
+            .query_substances(None, Some("liquid"), Some("imported"))
+            .expect("must query by source + phase");
+        assert_eq!(phase_source_results.len(), 1);
+        assert_eq!(phase_source_results[0].id, "substance-hydrogen-peroxide");
+
+        let no_results = repository
+            .query_substances(Some("chloride"), Some("gas"), None)
+            .expect("must return empty result set when filters do not match");
+        assert!(no_results.is_empty());
     }
 
     #[test]
