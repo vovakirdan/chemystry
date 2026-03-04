@@ -56,6 +56,8 @@ describe("RightPanelSkeleton stoichiometry summary", () => {
           coefficient: 2,
           initialAmountMol: 5,
           theoreticalAmountMol: 2,
+          actualYieldAmountMol: null,
+          percentYield: null,
           stoichRatioToLimiting: 2,
           consumedAmountMol: 2,
           producedAmountMol: null,
@@ -68,6 +70,8 @@ describe("RightPanelSkeleton stoichiometry summary", () => {
           coefficient: 1,
           initialAmountMol: 1,
           theoreticalAmountMol: 1,
+          actualYieldAmountMol: null,
+          percentYield: null,
           stoichRatioToLimiting: 1,
           consumedAmountMol: 1,
           producedAmountMol: null,
@@ -78,8 +82,10 @@ describe("RightPanelSkeleton stoichiometry summary", () => {
           label: "H2O",
           role: "product",
           coefficient: 2,
-          initialAmountMol: 0,
+          initialAmountMol: 1.8,
           theoreticalAmountMol: 2,
+          actualYieldAmountMol: 1.8,
+          percentYield: 90,
           stoichRatioToLimiting: 2,
           consumedAmountMol: null,
           producedAmountMol: 2,
@@ -102,6 +108,9 @@ describe("RightPanelSkeleton stoichiometry summary", () => {
     expect(html).toContain('data-testid="right-panel-summary-stoichiometry-products"');
     expect(html).toContain("H2O:");
     expect(html).toContain("2");
+    expect(html).toContain('data-testid="right-panel-summary-stoichiometry-yields"');
+    expect(html).toContain("% yield");
+    expect(html).toContain("% yield 90");
     expect(html).toContain("Units: amounts and reaction extent in");
   });
 

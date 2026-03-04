@@ -431,6 +431,7 @@ function buildStoichiometryResult(
       role: participant.role,
       stoichCoeffInput: participant.stoichCoeffInput,
       amountMolInput: participant.amountMolInput,
+      actualYieldMolInput: participant.role === "product" ? participant.amountMolInput : undefined,
     })),
   });
 }

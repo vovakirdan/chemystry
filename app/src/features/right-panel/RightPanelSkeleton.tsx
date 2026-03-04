@@ -403,6 +403,26 @@ function RightPanelSkeleton({
                             ))}
                         </ul>
 
+                        <p className="status-line">Actual product yields and percent yield:</p>
+                        <ul
+                          className="status-list"
+                          data-testid="right-panel-summary-stoichiometry-yields"
+                        >
+                          {stoichiometryResult.participants
+                            .filter((participant) => participant.role === "product")
+                            .map((participant) => (
+                              <li key={`${participant.id}-yield`}>
+                                {participant.label}: actual{" "}
+                                {formatStoichiometryValue(participant.actualYieldAmountMol ?? 0)}{" "}
+                                {stoichiometryResult.units.amount}; % yield{" "}
+                                {participant.percentYield === null
+                                  ? "n/a"
+                                  : formatStoichiometryValue(participant.percentYield)}{" "}
+                                {stoichiometryResult.units.percentYield}
+                              </li>
+                            ))}
+                        </ul>
+
                         <p className="status-line">Reactant amounts after full conversion:</p>
                         <ul
                           className="status-list"
@@ -443,7 +463,8 @@ function RightPanelSkeleton({
                       data-testid="right-panel-summary-stoichiometry-units"
                     >
                       Units: amounts and reaction extent in {stoichiometryResult.units.amount};
-                      coefficients as {stoichiometryResult.units.coefficient}.
+                      coefficients as {stoichiometryResult.units.coefficient}; percent yield in{" "}
+                      {stoichiometryResult.units.percentYield}.
                     </p>
                     <ul
                       className="status-list"

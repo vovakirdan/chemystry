@@ -30,6 +30,7 @@ describe("calculateStoichiometry", () => {
           role: "product",
           stoichCoeffInput: "2",
           amountMolInput: "0",
+          actualYieldMolInput: "0",
         },
       ],
     });
@@ -47,11 +48,14 @@ describe("calculateStoichiometry", () => {
     const water = result.participants.find((participant) => participant.id === "p-h2o");
     expect(water?.producedAmountMol).toBe(2);
     expect(water?.theoreticalAmountMol).toBe(2);
+    expect(water?.actualYieldAmountMol).toBe(0);
+    expect(water?.percentYield).toBe(0);
 
     const hydrogen = result.participants.find((participant) => participant.id === "r-h2");
     expect(hydrogen?.consumedAmountMol).toBe(2);
     expect(hydrogen?.remainingAmountMol).toBe(3);
     expect(hydrogen?.stoichRatioToLimiting).toBe(2);
+    expect(hydrogen?.percentYield).toBeNull();
   });
 
   it("supports co-limiting reactants when reactant ratios are exactly matched", () => {
@@ -77,6 +81,7 @@ describe("calculateStoichiometry", () => {
           role: "product",
           stoichCoeffInput: "2",
           amountMolInput: "0",
+          actualYieldMolInput: "0",
         },
       ],
     });
@@ -91,6 +96,7 @@ describe("calculateStoichiometry", () => {
 
     const ammonia = result.participants.find((participant) => participant.id === "nh3");
     expect(ammonia?.theoreticalAmountMol).toBe(2);
+    expect(ammonia?.percentYield).toBe(0);
   });
 
   it("does not merge distinct tiny extents into co-limiting reactants", () => {
@@ -116,6 +122,7 @@ describe("calculateStoichiometry", () => {
           role: "product",
           stoichCoeffInput: "1",
           amountMolInput: "0",
+          actualYieldMolInput: "0",
         },
       ],
     });
@@ -159,6 +166,7 @@ describe("calculateStoichiometry", () => {
       "NEGATIVE_AMOUNT_MOL",
       "INVALID_COEFFICIENT",
       "MISSING_AMOUNT_MOL",
+      "MISSING_ACTUAL_YIELD",
     ]);
     expect("reactionExtentMol" in result).toBe(false);
     expect("participants" in result).toBe(false);
@@ -225,6 +233,7 @@ describe("calculateStoichiometry", () => {
           role: "product",
           stoichCoeffInput: "1",
           amountMolInput: "0",
+          actualYieldMolInput: "1,5",
         },
       ],
     });
@@ -237,6 +246,163 @@ describe("calculateStoichiometry", () => {
     expect(result.reactionExtentMol).toBe(3);
     const product = result.participants.find((participant) => participant.id === "product-b");
     expect(product?.theoreticalAmountMol).toBe(3);
+    expect(product?.actualYieldAmountMol).toBe(1.5);
+    expect(product?.percentYield).toBe(50);
+  });
+
+  it("calculates percent yield from explicit product actual-yield input", () => {
+    const result = calculateStoichiometry({
+      participants: [
+        {
+          id: "reactant-a",
+          label: "A",
+          role: "reactant",
+          stoichCoeffInput: "1",
+          amountMolInput: "2",
+        },
+        {
+          id: "product-b",
+          label: "B",
+          role: "product",
+          stoichCoeffInput: "1",
+          amountMolInput: "0",
+          actualYieldMolInput: "1.5",
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+
+    const product = result.participants.find((participant) => participant.id === "product-b");
+    expect(product?.theoreticalAmountMol).toBe(2);
+    expect(product?.actualYieldAmountMol).toBe(1.5);
+    expect(product?.percentYield).toBe(75);
+  });
+
+  it("returns explicit validation error when product actual yield input is missing", () => {
+    const result = calculateStoichiometry({
+      participants: [
+        {
+          id: "reactant-a",
+          label: "A",
+          role: "reactant",
+          stoichCoeffInput: "1",
+          amountMolInput: "2",
+        },
+        {
+          id: "product-b",
+          label: "B",
+          role: "product",
+          stoichCoeffInput: "1",
+          amountMolInput: "1.5",
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+
+    expect(result.errors.map((error) => error.code)).toEqual(["MISSING_ACTUAL_YIELD"]);
+    expect(result.errors[0]?.field).toBe("actualYieldMolInput");
+  });
+
+  it("keeps product initial amount traceable when actual yield differs", () => {
+    const result = calculateStoichiometry({
+      participants: [
+        {
+          id: "reactant-a",
+          label: "A",
+          role: "reactant",
+          stoichCoeffInput: "1",
+          amountMolInput: "2",
+        },
+        {
+          id: "product-b",
+          label: "B",
+          role: "product",
+          stoichCoeffInput: "1",
+          amountMolInput: "0.25",
+          actualYieldMolInput: "1.5",
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+
+    const product = result.participants.find((participant) => participant.id === "product-b");
+    expect(product?.initialAmountMol).toBe(0.25);
+    expect(product?.actualYieldAmountMol).toBe(1.5);
+    expect(product?.theoreticalAmountMol).toBe(2);
+    expect(product?.percentYield).toBe(75);
+  });
+
+  it("returns explicit validation error when product actual yield is negative", () => {
+    const result = calculateStoichiometry({
+      participants: [
+        {
+          id: "reactant-a",
+          label: "A",
+          role: "reactant",
+          stoichCoeffInput: "1",
+          amountMolInput: "2",
+        },
+        {
+          id: "product-b",
+          label: "B",
+          role: "product",
+          stoichCoeffInput: "1",
+          amountMolInput: "1",
+          actualYieldMolInput: "-1",
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+
+    expect(result.errors.map((error) => error.code)).toEqual(["NEGATIVE_ACTUAL_YIELD"]);
+    expect(result.errors[0]?.field).toBe("actualYieldMolInput");
+  });
+
+  it("returns explicit validation error when theoretical yield is zero", () => {
+    const result = calculateStoichiometry({
+      participants: [
+        {
+          id: "reactant-a",
+          label: "A",
+          role: "reactant",
+          stoichCoeffInput: "1",
+          amountMolInput: "0",
+        },
+        {
+          id: "product-b",
+          label: "B",
+          role: "product",
+          stoichCoeffInput: "1",
+          amountMolInput: "0",
+          actualYieldMolInput: "0",
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+
+    expect(result.errors.map((error) => error.code)).toEqual(["ZERO_THEORETICAL_YIELD"]);
+    expect(result.errors[0]?.field).toBe("actualYieldMolInput");
+    expect("participants" in result).toBe(false);
   });
 });
 

@@ -8,6 +8,7 @@ export type StoichiometryParticipantInput = {
   role: StoichiometryParticipantRole;
   stoichCoeffInput: string;
   amountMolInput: string;
+  actualYieldMolInput?: string;
 };
 
 export type StoichiometryCalculationInput = {
@@ -18,12 +19,14 @@ export const STOICHIOMETRY_UNITS = {
   amount: "mol",
   coefficient: "molar ratio",
   reactionExtent: "mol",
+  percentYield: "%",
 } as const;
 
 export const STOICHIOMETRY_ASSUMPTIONS: ReadonlyArray<string> = [
   "Reaction coefficients from Builder are already balanced and used as exact molar ratios.",
   "All entered amounts are interpreted in mol.",
   "Theoretical amounts assume complete conversion until the limiting reactant is exhausted.",
+  "Product actual-yield inputs are interpreted in mol and used for percent-yield calculation.",
 ];
 
 export type StoichiometryValidationErrorCode =
@@ -35,9 +38,17 @@ export type StoichiometryValidationErrorCode =
   | "NON_POSITIVE_COEFFICIENT"
   | "MISSING_AMOUNT_MOL"
   | "INVALID_AMOUNT_MOL"
-  | "NEGATIVE_AMOUNT_MOL";
+  | "NEGATIVE_AMOUNT_MOL"
+  | "MISSING_ACTUAL_YIELD"
+  | "INVALID_ACTUAL_YIELD"
+  | "NEGATIVE_ACTUAL_YIELD"
+  | "ZERO_THEORETICAL_YIELD";
 
-export type StoichiometryValidationField = "reaction" | "stoichCoeffInput" | "amountMolInput";
+export type StoichiometryValidationField =
+  | "reaction"
+  | "stoichCoeffInput"
+  | "amountMolInput"
+  | "actualYieldMolInput";
 
 export type StoichiometryValidationError = {
   code: StoichiometryValidationErrorCode;
@@ -62,6 +73,8 @@ export type StoichiometryParticipantAmount = {
   coefficient: number;
   initialAmountMol: number;
   theoreticalAmountMol: number;
+  actualYieldAmountMol: number | null;
+  percentYield: number | null;
   stoichRatioToLimiting: number;
   consumedAmountMol: number | null;
   producedAmountMol: number | null;
@@ -94,6 +107,7 @@ type ParsedParticipant = {
   role: StoichiometryParticipantRole;
   coefficient: number;
   amountMol: number;
+  actualYieldMol: number | null;
 };
 
 type ReactantExtent = {
@@ -151,6 +165,7 @@ function parseParticipant(
   const participantLabel = normalizeParticipantLabel(participant.label, participantIndex);
   const normalizedCoefficient = participant.stoichCoeffInput.trim();
   const normalizedAmountMol = participant.amountMolInput.trim();
+  const normalizedActualYieldMol = participant.actualYieldMolInput?.trim() ?? "";
 
   let coefficient: number | null = null;
   if (normalizedCoefficient.length === 0) {
@@ -234,6 +249,48 @@ function parseParticipant(
     }
   }
 
+  let actualYieldMol: number | null = null;
+  if (participant.role === "product") {
+    if (normalizedActualYieldMol.length === 0) {
+      errors.push(
+        createParticipantError({
+          code: "MISSING_ACTUAL_YIELD",
+          field: "actualYieldMolInput",
+          participant,
+          participantLabel,
+          message: `${participantLabel}: enter actual yield in mol.`,
+        }),
+      );
+    } else {
+      const parsedActualYieldMol = parseNormalizedNumberInput(normalizedActualYieldMol);
+      if (!parsedActualYieldMol.ok) {
+        if (parsedActualYieldMol.code === "NEGATIVE_VALUE") {
+          errors.push(
+            createParticipantError({
+              code: "NEGATIVE_ACTUAL_YIELD",
+              field: "actualYieldMolInput",
+              participant,
+              participantLabel,
+              message: `${participantLabel}: actual yield in mol cannot be negative.`,
+            }),
+          );
+        } else {
+          errors.push(
+            createParticipantError({
+              code: "INVALID_ACTUAL_YIELD",
+              field: "actualYieldMolInput",
+              participant,
+              participantLabel,
+              message: `${participantLabel}: actual yield in mol must be a number.`,
+            }),
+          );
+        }
+      } else {
+        actualYieldMol = parsedActualYieldMol.value;
+      }
+    }
+  }
+
   if (coefficient === null || amountMol === null) {
     return null;
   }
@@ -244,6 +301,7 @@ function parseParticipant(
     role: participant.role,
     coefficient,
     amountMol,
+    actualYieldMol,
   };
 }
 
@@ -347,6 +405,7 @@ export function calculateStoichiometry(
     );
 
   const referenceLimitingCoefficient = limitingReactants[0].coefficient;
+  const yieldValidationErrors: StoichiometryValidationError[] = [];
   const participantSummaries: ReadonlyArray<StoichiometryParticipantAmount> =
     parsedParticipants.map((participant) => {
       const theoreticalAmountMol = participant.coefficient * reactionExtentMol;
@@ -362,12 +421,41 @@ export function calculateStoichiometry(
           coefficient: participant.coefficient,
           initialAmountMol: participant.amountMol,
           theoreticalAmountMol,
+          actualYieldAmountMol: null,
+          percentYield: null,
           stoichRatioToLimiting: participant.coefficient / referenceLimitingCoefficient,
           consumedAmountMol,
           producedAmountMol: null,
           remainingAmountMol,
         };
       }
+
+      const actualYieldAmountMol = participant.actualYieldMol;
+      if (actualYieldAmountMol === null) {
+        yieldValidationErrors.push({
+          code: "MISSING_ACTUAL_YIELD",
+          field: "actualYieldMolInput",
+          participantId: participant.id,
+          participantLabel: participant.label,
+          message: `${participant.label}: enter actual yield in mol.`,
+        });
+      }
+
+      if (Math.abs(theoreticalAmountMol) <= LIMITING_REACTANT_ABSOLUTE_TOLERANCE) {
+        yieldValidationErrors.push({
+          code: "ZERO_THEORETICAL_YIELD",
+          field: "actualYieldMolInput",
+          participantId: participant.id,
+          participantLabel: participant.label,
+          message: `${participant.label}: theoretical yield is 0 mol, so percent yield cannot be calculated.`,
+        });
+      }
+
+      const percentYield =
+        Math.abs(theoreticalAmountMol) <= LIMITING_REACTANT_ABSOLUTE_TOLERANCE ||
+        actualYieldAmountMol === null
+          ? null
+          : (actualYieldAmountMol / theoreticalAmountMol) * 100;
 
       return {
         id: participant.id,
@@ -376,12 +464,18 @@ export function calculateStoichiometry(
         coefficient: participant.coefficient,
         initialAmountMol: participant.amountMol,
         theoreticalAmountMol,
+        actualYieldAmountMol,
+        percentYield,
         stoichRatioToLimiting: participant.coefficient / referenceLimitingCoefficient,
         consumedAmountMol: null,
         producedAmountMol: theoreticalAmountMol,
         remainingAmountMol: null,
       };
     });
+
+  if (yieldValidationErrors.length > 0) {
+    return buildFailureResult(yieldValidationErrors);
+  }
 
   return {
     ok: true,

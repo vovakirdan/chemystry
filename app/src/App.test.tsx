@@ -150,6 +150,9 @@ describe("App pre-run validation", () => {
     expect(html).toContain('data-testid="right-panel-summary-stoichiometry-limiting"');
     expect(html).toContain("Limiting reactant:");
     expect(html).toContain('data-testid="right-panel-summary-stoichiometry-products"');
+    expect(html).toContain('data-testid="right-panel-summary-stoichiometry-yields"');
+    expect(html).toContain("% yield");
+    expect(html).toContain("% yield 100");
     expect(html).not.toContain(
       "Stoichiometry is blocked until required Builder inputs are complete.",
     );
