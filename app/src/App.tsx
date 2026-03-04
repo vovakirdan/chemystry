@@ -255,6 +255,24 @@ function toActionableBuilderValidationError(
       suffix: "cannot be negative.",
       messageSuffix: "cannot be negative.",
     },
+    {
+      sourceLabel: "Mass (g)",
+      targetLabel: "mass in grams",
+      suffix: "cannot be checked against Amount (mol) because molar mass is missing.",
+      messageSuffix: "cannot be validated without molar mass for selected substance.",
+    },
+    {
+      sourceLabel: "Mass (g)",
+      targetLabel: "mass in grams",
+      suffix: "is inconsistent with Amount (mol) for selected molar mass.",
+      messageSuffix: "is inconsistent with amount in mol for selected substance.",
+    },
+    {
+      sourceLabel: "Volume (L)",
+      targetLabel: "volume in liters",
+      suffix: "is inconsistent with Amount (mol) for gas molar volume.",
+      messageSuffix: "is inconsistent with amount in mol for gas phase.",
+    },
   ];
 
   for (const pattern of fieldPatterns) {
@@ -323,7 +341,7 @@ function collectBuilderValidationErrors(
     }
   }
 
-  for (const error of validateBuilderDraftForLaunch(draft)) {
+  for (const error of validateBuilderDraftForLaunch(draft, substances)) {
     errors.add(toActionableBuilderValidationError(error, labelsByParticipantId));
   }
 

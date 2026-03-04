@@ -7,7 +7,7 @@ import {
 } from "./units";
 
 describe("parseNormalizedNumberInput", () => {
-  it("normalizes trim, comma decimal separator, and exponent notation", () => {
+  it("normalizes trim, spaces, comma decimal separator, and exponent notation", () => {
     expect(parseNormalizedNumberInput(" 1,5e1 ")).toEqual({
       ok: true,
       value: 15,
@@ -19,6 +19,12 @@ describe("parseNormalizedNumberInput", () => {
       value: 0.25,
       normalizedInput: "2.5E-1",
     });
+
+    expect(parseNormalizedNumberInput(" 1,234 e -2 ")).toEqual({
+      ok: true,
+      value: 0.01234,
+      normalizedInput: "1.234e-2",
+    });
   });
 
   it("returns structured errors for empty, invalid, and negative inputs", () => {
@@ -28,6 +34,21 @@ describe("parseNormalizedNumberInput", () => {
     });
 
     expect(parseNormalizedNumberInput("1,2.3")).toMatchObject({
+      ok: false,
+      code: "INVALID_NUMBER",
+    });
+
+    expect(parseNormalizedNumberInput("1 2,3,4")).toMatchObject({
+      ok: false,
+      code: "INVALID_NUMBER",
+    });
+
+    expect(parseNormalizedNumberInput("1 2")).toMatchObject({
+      ok: false,
+      code: "INVALID_NUMBER",
+    });
+
+    expect(parseNormalizedNumberInput("1 e 2 3")).toMatchObject({
       ok: false,
       code: "INVALID_NUMBER",
     });

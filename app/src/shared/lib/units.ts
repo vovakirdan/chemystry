@@ -79,19 +79,26 @@ const UNIT_ALIAS_TO_SYMBOL: Readonly<Record<string, SupportedUnitSymbol>> = {
 };
 
 function normalizeDecimalInput(valueInput: string): string | null {
-  if (valueInput.includes(",")) {
-    if (valueInput.includes(".")) {
-      return null;
-    }
-
-    if (valueInput.split(",").length !== 2) {
-      return null;
-    }
-
-    return valueInput.replace(",", ".");
+  if (/\d\s+\d/u.test(valueInput)) {
+    return null;
   }
 
-  return valueInput;
+  const compactInput = valueInput.replace(/\s+/gu, "");
+  const commaCount = compactInput.split(",").length - 1;
+  const dotCount = compactInput.split(".").length - 1;
+
+  if (commaCount > 1 || dotCount > 1 || (commaCount > 0 && dotCount > 0)) {
+    return null;
+  }
+
+  const normalizedInput = commaCount === 0 ? compactInput : compactInput.replace(",", ".");
+  const normalizedNumberPattern = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/u;
+
+  if (!normalizedNumberPattern.test(normalizedInput)) {
+    return null;
+  }
+
+  return normalizedInput;
 }
 
 export function parseNormalizedNumberInput(

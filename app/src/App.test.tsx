@@ -149,6 +149,118 @@ describe("App pre-run validation", () => {
     ).toBe(true);
   });
 
+  it("shows actionable dimensional consistency errors in builder pre-run checks", () => {
+    const validation = buildLaunchValidationModel(
+      createBuilderDraftWithRawId({
+        participants: [
+          {
+            id: "participant-dimension-mismatch",
+            substanceId: "builtin-substance-hydrogen",
+            role: "reactant",
+            stoichCoeffInput: "1",
+            phase: "gas",
+            amountMolInput: "1",
+            massGInput: "3",
+            volumeLInput: "22.4",
+          },
+          {
+            id: "participant-dimension-mismatch-2",
+            substanceId: "builtin-substance-hydrogen",
+            role: "product",
+            stoichCoeffInput: "1",
+            phase: "gas",
+            amountMolInput: "1",
+            massGInput: "2.01588",
+            volumeLInput: "22.4",
+          },
+        ],
+      }),
+      VALID_RUNTIME_SETTINGS,
+      SAMPLE_SUBSTANCES,
+    );
+
+    const builderErrors =
+      validation.sections.find((section) => section.id === "builder")?.errors ?? [];
+
+    expect(validation.hasErrors).toBe(true);
+    expect(
+      builderErrors.some((message) =>
+        message.includes(
+          "Participant 1 (Hydrogen): mass in grams is inconsistent with amount in mol for selected substance.",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("shows actionable missing molar-mass message in builder pre-run checks", () => {
+    const validation = buildLaunchValidationModel(
+      createBuilderDraftWithRawId({
+        participants: [
+          {
+            id: "participant-missing-molar-mass",
+            substanceId: "builtin-substance-hydrogen",
+            role: "reactant",
+            stoichCoeffInput: "1",
+            phase: "gas",
+            amountMolInput: "1",
+            massGInput: "2",
+            volumeLInput: "22.4",
+          },
+        ],
+      }),
+      VALID_RUNTIME_SETTINGS,
+      [
+        {
+          ...SAMPLE_SUBSTANCES[0],
+          molarMassGMol: null,
+        },
+      ],
+    );
+    const builderErrors =
+      validation.sections.find((section) => section.id === "builder")?.errors ?? [];
+
+    expect(validation.hasErrors).toBe(true);
+    expect(
+      builderErrors.some((message) =>
+        message.includes(
+          "Participant 1 (Hydrogen): mass in grams cannot be validated without molar mass for selected substance.",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("shows actionable gas volume mismatch message in builder pre-run checks", () => {
+    const validation = buildLaunchValidationModel(
+      createBuilderDraftWithRawId({
+        participants: [
+          {
+            id: "participant-gas-volume-mismatch",
+            substanceId: "builtin-substance-hydrogen",
+            role: "reactant",
+            stoichCoeffInput: "1",
+            phase: "gas",
+            amountMolInput: "1",
+            massGInput: "2.01588",
+            volumeLInput: "30",
+          },
+        ],
+      }),
+      VALID_RUNTIME_SETTINGS,
+      SAMPLE_SUBSTANCES,
+    );
+    const builderErrors =
+      validation.sections.find((section) => section.id === "builder")?.errors ?? [];
+
+    expect(validation.hasErrors).toBe(true);
+    expect(
+      builderErrors.some((message) =>
+        message.includes(
+          "Participant 1 (Hydrogen): volume in liters is inconsistent with amount in mol for gas phase.",
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("opens launch gate after fixing runtime and builder errors", () => {
     const invalidValidation = buildLaunchValidationModel(
       createBuilderDraftWithRawId(),

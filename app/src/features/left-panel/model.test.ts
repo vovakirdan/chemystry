@@ -535,7 +535,7 @@ describe("left panel library model", () => {
       createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
       participant,
     );
-    const errors = validateBuilderDraftForLaunch(draft);
+    const errors = validateBuilderDraftForLaunch(draft, SAMPLE_SUBSTANCES);
 
     expect(errors).toContain(
       'Stoich coeff for participant "participant-negative" cannot be negative.',
@@ -549,20 +549,183 @@ describe("left panel library model", () => {
     );
   });
 
-  it("accepts comma decimal and exponent participant numeric inputs during launch validation", () => {
-    const participant = createParticipant("participant-normalized", {
-      phase: "gas" as SubstancePhaseV1,
-      stoichCoeffInput: "1e1",
-      amountMolInput: "1,5",
-      massGInput: "3e0",
-      volumeLInput: "2,5e1",
+  it("blocks launch when mass and amount are dimensionally inconsistent", () => {
+    const participant = createParticipant("participant-mass-mismatch", {
+      phase: "gas",
+      stoichCoeffInput: "1",
+      amountMolInput: "1",
+      massGInput: "3.2",
+      volumeLInput: "22.4",
     });
     const draft = addBuilderDraftParticipant(
       createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
       participant,
     );
 
-    expect(validateBuilderDraftForLaunch(draft)).toEqual([]);
+    const errors = validateBuilderDraftForLaunch(draft, SAMPLE_SUBSTANCES);
+
+    expect(errors).toContain(
+      'Mass (g) for participant "participant-mass-mismatch" is inconsistent with Amount (mol) for selected molar mass.',
+    );
+  });
+
+  it("blocks launch when near-zero mass is inconsistent with zero amount", () => {
+    const participant = createParticipant("participant-near-zero-mass-mismatch", {
+      phase: "gas",
+      stoichCoeffInput: "1",
+      amountMolInput: "0",
+      massGInput: "0.00009",
+      volumeLInput: "0",
+    });
+    const draft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      participant,
+    );
+
+    const errors = validateBuilderDraftForLaunch(draft, SAMPLE_SUBSTANCES);
+
+    expect(errors).toContain(
+      'Mass (g) for participant "participant-near-zero-mass-mismatch" is inconsistent with Amount (mol) for selected molar mass.',
+    );
+  });
+
+  it("blocks launch when gas volume and amount are dimensionally inconsistent", () => {
+    const participant = createParticipant("participant-volume-mismatch", {
+      phase: "gas",
+      stoichCoeffInput: "1",
+      amountMolInput: "1",
+      massGInput: "2.01588",
+      volumeLInput: "30",
+    });
+    const draft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      participant,
+    );
+
+    const errors = validateBuilderDraftForLaunch(draft, SAMPLE_SUBSTANCES);
+
+    expect(errors).toContain(
+      'Volume (L) for participant "participant-volume-mismatch" is inconsistent with Amount (mol) for gas molar volume.',
+    );
+  });
+
+  it("blocks launch when near-zero gas volume is inconsistent with zero amount", () => {
+    const participant = createParticipant("participant-near-zero-volume-mismatch", {
+      phase: "gas",
+      stoichCoeffInput: "1",
+      amountMolInput: "0",
+      massGInput: "0",
+      volumeLInput: "0.00009",
+    });
+    const draft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      participant,
+    );
+
+    const errors = validateBuilderDraftForLaunch(draft, SAMPLE_SUBSTANCES);
+
+    expect(errors).toContain(
+      'Volume (L) for participant "participant-near-zero-volume-mismatch" is inconsistent with Amount (mol) for gas molar volume.',
+    );
+  });
+
+  it("accepts mass and gas-volume values inside dimension tolerance", () => {
+    const participant = createParticipant("participant-dimension-within-tolerance", {
+      phase: "gas",
+      stoichCoeffInput: "1",
+      amountMolInput: "1",
+      massGInput: "2.01598",
+      volumeLInput: "22.401",
+    });
+    const draft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      participant,
+    );
+
+    expect(validateBuilderDraftForLaunch(draft, SAMPLE_SUBSTANCES)).toEqual([]);
+  });
+
+  it("blocks launch when mass and gas-volume exceed dimension tolerance", () => {
+    const participant = createParticipant("participant-dimension-over-tolerance", {
+      phase: "gas",
+      stoichCoeffInput: "1",
+      amountMolInput: "1",
+      massGInput: "2.0162",
+      volumeLInput: "22.405",
+    });
+    const draft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      participant,
+    );
+
+    const errors = validateBuilderDraftForLaunch(draft, SAMPLE_SUBSTANCES);
+
+    expect(errors).toContain(
+      'Mass (g) for participant "participant-dimension-over-tolerance" is inconsistent with Amount (mol) for selected molar mass.',
+    );
+    expect(errors).toContain(
+      'Volume (L) for participant "participant-dimension-over-tolerance" is inconsistent with Amount (mol) for gas molar volume.',
+    );
+  });
+
+  it("blocks launch when mass/amount check cannot resolve molar mass", () => {
+    const participant = createParticipant("participant-missing-molar-mass", {
+      phase: "gas",
+      stoichCoeffInput: "1",
+      amountMolInput: "1",
+      massGInput: "2",
+      volumeLInput: "22.4",
+    });
+    const draft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      participant,
+    );
+    const substancesWithoutMolarMass: ReadonlyArray<SubstanceCatalogEntryV1> = [
+      {
+        ...SAMPLE_SUBSTANCES[0],
+        molarMassGMol: null,
+      },
+      SAMPLE_SUBSTANCES[1],
+      SAMPLE_SUBSTANCES[2],
+    ];
+
+    const errors = validateBuilderDraftForLaunch(draft, substancesWithoutMolarMass);
+
+    expect(errors).toContain(
+      'Mass (g) for participant "participant-missing-molar-mass" cannot be checked against Amount (mol) because molar mass is missing.',
+    );
+  });
+
+  it("accepts comma decimal and exponent participant numeric inputs during launch validation", () => {
+    const participant = createParticipant("participant-normalized", {
+      phase: "gas" as SubstancePhaseV1,
+      stoichCoeffInput: "1e1",
+      amountMolInput: "1,5",
+      massGInput: "3,02382e0",
+      volumeLInput: "3,36e1",
+    });
+    const draft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      participant,
+    );
+
+    expect(validateBuilderDraftForLaunch(draft, SAMPLE_SUBSTANCES)).toEqual([]);
+  });
+
+  it("accepts parser-normalized spaces and exponent formatting when dimensions are consistent", () => {
+    const participant = createParticipant("participant-space-normalized", {
+      phase: "gas" as SubstancePhaseV1,
+      stoichCoeffInput: " 1 e0 ",
+      amountMolInput: " 1,5 e0 ",
+      massGInput: " 3,02382 ",
+      volumeLInput: " 3,36 e1 ",
+    });
+    const draft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      participant,
+    );
+
+    expect(validateBuilderDraftForLaunch(draft, SAMPLE_SUBSTANCES)).toEqual([]);
   });
 
   it("resolves selected preset id and formats metadata labels", () => {

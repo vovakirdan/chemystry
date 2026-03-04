@@ -5,7 +5,11 @@ import type {
   SubstancePhaseV1,
   SubstanceSourceV1,
 } from "../../shared/contracts/ipc/v1";
-import { convertQuantityInput, parseNormalizedNumberInput } from "../../shared/lib/units";
+import {
+  STANDARD_MOLAR_VOLUME_L_PER_MOL,
+  convertQuantityInput,
+  parseNormalizedNumberInput,
+} from "../../shared/lib/units";
 
 export const LEFT_PANEL_TAB_IDS = ["library", "builder", "presets"] as const;
 
@@ -347,7 +351,10 @@ export function parseBuilderDraftFromStorage(
   return parseBuilderDraftValue(parsedValue.draft, substances);
 }
 
-export function validateBuilderDraftForLaunch(draft: BuilderDraft): ReadonlyArray<string> {
+export function validateBuilderDraftForLaunch(
+  draft: BuilderDraft,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): ReadonlyArray<string> {
   const errors: string[] = [];
 
   for (const participant of draft.participants) {
@@ -379,6 +386,7 @@ export function validateBuilderDraftForLaunch(draft: BuilderDraft): ReadonlyArra
       "Volume (L)",
       participant.volumeLInput,
     );
+    pushBuilderParticipantDimensionConsistencyErrors(errors, participant, substances);
   }
 
   return errors;
@@ -569,6 +577,9 @@ const PARTICIPANT_CONVERSION_SOURCE_PRIORITY: ReadonlyArray<ParticipantConvertib
   "volumeLInput",
 ];
 
+const DIMENSION_CHECK_ABSOLUTE_TOLERANCE = 1e-6;
+const DIMENSION_CHECK_RELATIVE_TOLERANCE = 1e-4;
+
 function parseNonNegativeInputNumber(value: string): number | null {
   const parsedValue = parseNormalizedNumberInput(value);
   if (!parsedValue.ok) {
@@ -705,6 +716,59 @@ function pushBuilderParticipantNonNegativeFieldError(
 
     errors.push(`${fieldLabel} for participant "${participantId}" must be a number.`);
     return;
+  }
+}
+
+function isDimensionValueConsistent(expectedValue: number, actualValue: number): boolean {
+  const delta = Math.abs(expectedValue - actualValue);
+  const scale = Math.max(Math.abs(expectedValue), Math.abs(actualValue), Number.EPSILON);
+  return (
+    delta <= DIMENSION_CHECK_ABSOLUTE_TOLERANCE ||
+    delta <= scale * DIMENSION_CHECK_RELATIVE_TOLERANCE
+  );
+}
+
+function pushBuilderParticipantDimensionConsistencyErrors(
+  errors: string[],
+  participant: BuilderDraftParticipant,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): void {
+  const parsedAmountMol = parseNonNegativeInputNumber(participant.amountMolInput);
+  const parsedMassG = parseNonNegativeInputNumber(participant.massGInput);
+  const parsedVolumeL = parseNonNegativeInputNumber(participant.volumeLInput);
+
+  if (parsedAmountMol !== null && parsedMassG !== null) {
+    const hasCatalogContext = substances.some(
+      (substance) => substance.id === participant.substanceId,
+    );
+    if (hasCatalogContext) {
+      const molarMassGMol = resolveParticipantMolarMassGMol(participant, substances);
+      if (molarMassGMol === null) {
+        errors.push(
+          `Mass (g) for participant "${participant.id}" cannot be checked against Amount (mol) because molar mass is missing.`,
+        );
+      } else {
+        const expectedMassG = parsedAmountMol * molarMassGMol;
+        if (!isDimensionValueConsistent(expectedMassG, parsedMassG)) {
+          errors.push(
+            `Mass (g) for participant "${participant.id}" is inconsistent with Amount (mol) for selected molar mass.`,
+          );
+        }
+      }
+    }
+  }
+
+  if (participant.phase !== "gas") {
+    return;
+  }
+
+  if (parsedAmountMol !== null && parsedVolumeL !== null) {
+    const expectedVolumeL = parsedAmountMol * STANDARD_MOLAR_VOLUME_L_PER_MOL;
+    if (!isDimensionValueConsistent(expectedVolumeL, parsedVolumeL)) {
+      errors.push(
+        `Volume (L) for participant "${participant.id}" is inconsistent with Amount (mol) for gas molar volume.`,
+      );
+    }
   }
 }
 
