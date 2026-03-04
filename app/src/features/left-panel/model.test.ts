@@ -609,6 +609,47 @@ describe("left panel library model", () => {
     );
   });
 
+  it("accepts runtime-aware gas molar volume when launch validation receives runtime context", () => {
+    const participant = createParticipant("participant-runtime-consistent", {
+      phase: "gas",
+      stoichCoeffInput: "1",
+      amountMolInput: "1",
+      massGInput: "2.01588",
+      volumeLInput: "24.4653953247",
+    });
+    const draft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      participant,
+    );
+
+    expect(
+      validateBuilderDraftForLaunch(draft, SAMPLE_SUBSTANCES, {
+        gasMolarVolumeLPerMol: 24.4653953247,
+      }),
+    ).toEqual([]);
+  });
+
+  it("falls back to standard gas molar volume when runtime context is invalid", () => {
+    const participant = createParticipant("participant-runtime-fallback", {
+      phase: "gas",
+      stoichCoeffInput: "1",
+      amountMolInput: "1",
+      massGInput: "2.01588",
+      volumeLInput: "24.4653953247",
+    });
+    const draft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      participant,
+    );
+    const errors = validateBuilderDraftForLaunch(draft, SAMPLE_SUBSTANCES, {
+      gasMolarVolumeLPerMol: Number.NaN,
+    });
+
+    expect(errors).toContain(
+      'Volume (L) for participant "participant-runtime-fallback" is inconsistent with Amount (mol) for gas molar volume.',
+    );
+  });
+
   it("blocks launch when near-zero gas volume is inconsistent with zero amount", () => {
     const participant = createParticipant("participant-near-zero-volume-mismatch", {
       phase: "gas",

@@ -16,6 +16,7 @@ const VALID_RUNTIME_SETTINGS: RightPanelRuntimeSettings = {
   precisionProfile: "Balanced",
   fpsLimit: 60,
 };
+const RUNTIME_IDEAL_GAS_MOLAR_VOLUME_L_PER_MOL = "24.4653953247";
 
 const SAMPLE_SUBSTANCES: ReadonlyArray<SubstanceCatalogEntryV1> = [
   {
@@ -71,7 +72,7 @@ function createValidBuilderDraft(overrides: Partial<BuilderDraft> = {}): Builder
         phase: "gas",
         amountMolInput: "1",
         massGInput: "2.01588",
-        volumeLInput: "22.4",
+        volumeLInput: RUNTIME_IDEAL_GAS_MOLAR_VOLUME_L_PER_MOL,
       },
       {
         id: "participant-valid-2",
@@ -81,7 +82,7 @@ function createValidBuilderDraft(overrides: Partial<BuilderDraft> = {}): Builder
         phase: "gas",
         amountMolInput: "1",
         massGInput: "2.01588",
-        volumeLInput: "22.4",
+        volumeLInput: RUNTIME_IDEAL_GAS_MOLAR_VOLUME_L_PER_MOL,
       },
     ],
     ...overrides,
@@ -151,6 +152,11 @@ describe("App pre-run validation", () => {
     expect(html).toContain("Limiting reactant:");
     expect(html).toContain('data-testid="right-panel-summary-stoichiometry-products"');
     expect(html).toContain('data-testid="right-panel-summary-stoichiometry-yields"');
+    expect(html).toContain('data-testid="right-panel-summary-stoichiometry-concentrations"');
+    expect(html).toContain("Concentrations from entered amount/volume:");
+    expect(html).toContain('data-testid="right-panel-summary-stoichiometry-gas-runtime"');
+    expect(html).toContain("Gas calculations at 25");
+    expect(html).toContain('data-testid="right-panel-summary-stoichiometry-gas"');
     expect(html).toContain("% yield");
     expect(html).toContain("% yield 100");
     expect(html).not.toContain(
@@ -369,6 +375,93 @@ describe("App pre-run validation", () => {
     expect(validValidation.firstError).toBeNull();
   });
 
+  it("keeps launch unblocked for gas values consistent with runtime-aware ideal gas molar volume", () => {
+    const validation = buildLaunchValidationModel(
+      createValidBuilderDraft({
+        participants: [
+          {
+            id: "participant-runtime-reactant",
+            substanceId: "builtin-substance-hydrogen",
+            role: "reactant",
+            stoichCoeffInput: "1",
+            phase: "gas",
+            amountMolInput: "1",
+            massGInput: "2.01588",
+            volumeLInput: "24.4653953247",
+          },
+          {
+            id: "participant-runtime-product",
+            substanceId: "builtin-substance-hydrogen",
+            role: "product",
+            stoichCoeffInput: "1",
+            phase: "gas",
+            amountMolInput: "1",
+            massGInput: "2.01588",
+            volumeLInput: "24.4653953247",
+          },
+        ],
+      }),
+      VALID_RUNTIME_SETTINGS,
+      SAMPLE_SUBSTANCES,
+    );
+    const builderErrors =
+      validation.sections.find((section) => section.id === "builder")?.errors ?? [];
+
+    expect(validation.hasErrors).toBe(false);
+    expect(
+      builderErrors.some((message) => message.includes("volume in liters is inconsistent")),
+    ).toBe(false);
+  });
+
+  it("enforces absolute-zero boundary with strict parity to gas calculation constraints", () => {
+    const nonGasValidDraft = createValidBuilderDraft({
+      participants: [
+        {
+          id: "participant-abszero-reactant",
+          substanceId: "builtin-substance-hydrogen",
+          role: "reactant",
+          stoichCoeffInput: "1",
+          phase: "liquid",
+          amountMolInput: "1",
+          massGInput: "2.01588",
+          volumeLInput: "1",
+        },
+        {
+          id: "participant-abszero-product",
+          substanceId: "builtin-substance-hydrogen",
+          role: "product",
+          stoichCoeffInput: "1",
+          phase: "liquid",
+          amountMolInput: "1",
+          massGInput: "2.01588",
+          volumeLInput: "1",
+        },
+      ],
+    });
+    const atAbsoluteZero = buildLaunchValidationModel(
+      nonGasValidDraft,
+      {
+        ...VALID_RUNTIME_SETTINGS,
+        temperatureC: -273.15,
+      },
+      SAMPLE_SUBSTANCES,
+    );
+    const justAboveAbsoluteZero = buildLaunchValidationModel(
+      nonGasValidDraft,
+      {
+        ...VALID_RUNTIME_SETTINGS,
+        temperatureC: -273.14,
+      },
+      SAMPLE_SUBSTANCES,
+    );
+
+    expect(atAbsoluteZero.hasErrors).toBe(true);
+    expect(
+      atAbsoluteZero.sections.find((section) => section.id === "environment")?.errors,
+    ).toContain("Set temperature above -273.15°C and up to 1000°C.");
+    expect(justAboveAbsoluteZero.hasErrors).toBe(false);
+  });
+
   it("shows model-limitation warning with explain hint and keeps Play unblocked", () => {
     const validation = buildLaunchValidationModel(
       createValidBuilderDraft(),
@@ -382,7 +475,8 @@ describe("App pre-run validation", () => {
     expect(validation.hasErrors).toBe(false);
     expect(validation.hasWarnings).toBe(true);
     expect(warningMessage).toContain("Model confidence / approximation limit");
-    expect(warningHint).toContain("22.4 L/mol");
+    expect(warningHint).toContain("runtime temperature/pressure");
+    expect(warningHint).toContain("fallback to 22.4 L/mol");
 
     const startResult = applySimulationLifecycleCommand({
       command: "start",

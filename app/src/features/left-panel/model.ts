@@ -84,6 +84,10 @@ export interface UserSubstanceDraftValidationResult {
   input: UserSubstanceFormInput | null;
 }
 
+export interface BuilderLaunchValidationOptions {
+  gasMolarVolumeLPerMol?: number | null;
+}
+
 export const DEFAULT_USER_SUBSTANCE_DRAFT: Readonly<UserSubstanceDraft> = {
   name: "",
   formula: "",
@@ -354,8 +358,12 @@ export function parseBuilderDraftFromStorage(
 export function validateBuilderDraftForLaunch(
   draft: BuilderDraft,
   substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+  options: BuilderLaunchValidationOptions = {},
 ): ReadonlyArray<string> {
   const errors: string[] = [];
+  const gasMolarVolumeLPerMol = resolveValidationGasMolarVolumeLPerMol(
+    options.gasMolarVolumeLPerMol,
+  );
 
   for (const participant of draft.participants) {
     if (!isSubstancePhase(participant.phase)) {
@@ -386,7 +394,12 @@ export function validateBuilderDraftForLaunch(
       "Volume (L)",
       participant.volumeLInput,
     );
-    pushBuilderParticipantDimensionConsistencyErrors(errors, participant, substances);
+    pushBuilderParticipantDimensionConsistencyErrors(
+      errors,
+      participant,
+      substances,
+      gasMolarVolumeLPerMol,
+    );
   }
 
   return errors;
@@ -589,6 +602,21 @@ function parseNonNegativeInputNumber(value: string): number | null {
   return parsedValue.value;
 }
 
+function resolveValidationGasMolarVolumeLPerMol(
+  gasMolarVolumeLPerMol: number | null | undefined,
+): number {
+  if (
+    gasMolarVolumeLPerMol === undefined ||
+    gasMolarVolumeLPerMol === null ||
+    !Number.isFinite(gasMolarVolumeLPerMol) ||
+    gasMolarVolumeLPerMol <= 0
+  ) {
+    return STANDARD_MOLAR_VOLUME_L_PER_MOL;
+  }
+
+  return gasMolarVolumeLPerMol;
+}
+
 function resolveParticipantMolarMassGMol(
   participant: BuilderDraftParticipant,
   substances: ReadonlyArray<SubstanceCatalogEntryV1>,
@@ -732,6 +760,7 @@ function pushBuilderParticipantDimensionConsistencyErrors(
   errors: string[],
   participant: BuilderDraftParticipant,
   substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+  gasMolarVolumeLPerMol: number,
 ): void {
   const parsedAmountMol = parseNonNegativeInputNumber(participant.amountMolInput);
   const parsedMassG = parseNonNegativeInputNumber(participant.massGInput);
@@ -763,7 +792,7 @@ function pushBuilderParticipantDimensionConsistencyErrors(
   }
 
   if (parsedAmountMol !== null && parsedVolumeL !== null) {
-    const expectedVolumeL = parsedAmountMol * STANDARD_MOLAR_VOLUME_L_PER_MOL;
+    const expectedVolumeL = parsedAmountMol * gasMolarVolumeLPerMol;
     if (!isDimensionValueConsistent(expectedVolumeL, parsedVolumeL)) {
       errors.push(
         `Volume (L) for participant "${participant.id}" is inconsistent with Amount (mol) for gas molar volume.`,

@@ -127,10 +127,12 @@ const MIN_FPS_LIMIT = 15;
 const MAX_FPS_LIMIT = 240;
 const HIGH_PRECISION_MAX_FPS = 120;
 const CUSTOM_PRECISION_MIN_PASSES = 50;
+const IDEAL_GAS_CONSTANT_L_ATM_PER_MOL_K = 0.082057338;
+const CELSIUS_TO_KELVIN_OFFSET = 273.15;
 const IDEAL_GAS_APPROXIMATION_WARNING_MESSAGE =
   "Model confidence / approximation limit: gas amount-volume checks use an ideal-gas baseline in MVP.";
 const IDEAL_GAS_APPROXIMATION_WARNING_HINT =
-  "Checks assume 22.4 L/mol at standard conditions and do not model non-ideal behavior or runtime temperature/pressure shifts yet.";
+  "Checks use ideal-gas molar volume from runtime temperature/pressure when valid, otherwise fallback to 22.4 L/mol; non-ideal behavior is not modeled in MVP.";
 
 type LaunchValidationSectionId = "builder" | "environment" | "calculations";
 
@@ -320,6 +322,7 @@ function toActionableBuilderValidationError(
 function collectBuilderValidationErrors(
   draft: BuilderDraft | null,
   substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+  runtimeSettings: RightPanelRuntimeSettings,
 ): ReadonlyArray<string> {
   if (draft === null) {
     return ['Load a preset in Builder, then add participants before pressing "Play".'];
@@ -369,7 +372,9 @@ function collectBuilderValidationErrors(
     }
   }
 
-  for (const error of validateBuilderDraftForLaunch(draft, substances)) {
+  for (const error of validateBuilderDraftForLaunch(draft, substances, {
+    gasMolarVolumeLPerMol: resolveRuntimeGasMolarVolumeLPerMol(runtimeSettings),
+  })) {
     errors.add(toActionableBuilderValidationError(error, labelsByParticipantId));
   }
 
@@ -411,10 +416,15 @@ function collectBuilderValidationWarnings(
 function buildStoichiometryResult(
   draft: BuilderDraft | null,
   substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+  runtimeSettings: RightPanelRuntimeSettings,
 ): StoichiometryCalculationResult {
   if (draft === null) {
     return calculateStoichiometry({
       participants: [],
+      runtimeSettings: {
+        temperatureC: runtimeSettings.temperatureC,
+        pressureAtm: runtimeSettings.pressureAtm,
+      },
     });
   }
 
@@ -431,8 +441,14 @@ function buildStoichiometryResult(
       role: participant.role,
       stoichCoeffInput: participant.stoichCoeffInput,
       amountMolInput: participant.amountMolInput,
+      phase: participant.phase,
+      volumeLInput: participant.volumeLInput,
       actualYieldMolInput: participant.role === "product" ? participant.amountMolInput : undefined,
     })),
+    runtimeSettings: {
+      temperatureC: runtimeSettings.temperatureC,
+      pressureAtm: runtimeSettings.pressureAtm,
+    },
   });
 }
 
@@ -444,10 +460,10 @@ function collectEnvironmentValidationErrors(
   if (settings.temperatureC === null) {
     errors.push("Enter temperature in Environment.");
   } else if (
-    settings.temperatureC < MIN_TEMPERATURE_C ||
+    settings.temperatureC <= MIN_TEMPERATURE_C ||
     settings.temperatureC > MAX_TEMPERATURE_C
   ) {
-    errors.push(`Set temperature between ${MIN_TEMPERATURE_C}°C and ${MAX_TEMPERATURE_C}°C.`);
+    errors.push(`Set temperature above ${MIN_TEMPERATURE_C}°C and up to ${MAX_TEMPERATURE_C}°C.`);
   }
 
   if (settings.pressureAtm === null) {
@@ -564,6 +580,27 @@ function buildLaunchValidationSection(
   };
 }
 
+function resolveRuntimeGasMolarVolumeLPerMol(settings: RightPanelRuntimeSettings): number | null {
+  if (settings.temperatureC === null || settings.pressureAtm === null) {
+    return null;
+  }
+
+  if (!Number.isFinite(settings.temperatureC) || !Number.isFinite(settings.pressureAtm)) {
+    return null;
+  }
+
+  if (settings.pressureAtm <= 0) {
+    return null;
+  }
+
+  const temperatureK = settings.temperatureC + CELSIUS_TO_KELVIN_OFFSET;
+  if (temperatureK <= 0) {
+    return null;
+  }
+
+  return (IDEAL_GAS_CONSTANT_L_ATM_PER_MOL_K * temperatureK) / settings.pressureAtm;
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export function buildLaunchValidationModel(
   builderDraft: BuilderDraft | null,
@@ -574,7 +611,7 @@ export function buildLaunchValidationModel(
     buildLaunchValidationSection(
       "builder",
       "Builder",
-      collectBuilderValidationErrors(builderDraft, substances),
+      collectBuilderValidationErrors(builderDraft, substances, runtimeSettings),
       collectBuilderValidationWarnings(builderDraft),
     ),
     buildLaunchValidationSection(
@@ -1526,8 +1563,8 @@ function App({ initialBuilderDraft = null }: AppProps) {
     [allSubstances, builderDraft, runtimeSettings],
   );
   const stoichiometryResult = useMemo(
-    () => buildStoichiometryResult(builderDraft, allSubstances),
-    [allSubstances, builderDraft],
+    () => buildStoichiometryResult(builderDraft, allSubstances, runtimeSettings),
+    [allSubstances, builderDraft, runtimeSettings],
   );
 
   const builderLaunchValidationErrors =

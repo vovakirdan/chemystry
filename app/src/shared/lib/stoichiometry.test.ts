@@ -56,6 +56,9 @@ describe("calculateStoichiometry", () => {
     expect(hydrogen?.remainingAmountMol).toBe(3);
     expect(hydrogen?.stoichRatioToLimiting).toBe(2);
     expect(hydrogen?.percentYield).toBeNull();
+    expect(result.derivedCalculations.concentrations).toEqual([]);
+    expect(result.derivedCalculations.gasRuntime).toBeNull();
+    expect(result.derivedCalculations.gasCalculations).toEqual([]);
   });
 
   it("supports co-limiting reactants when reactant ratios are exactly matched", () => {
@@ -403,6 +406,167 @@ describe("calculateStoichiometry", () => {
     expect(result.errors.map((error) => error.code)).toEqual(["ZERO_THEORETICAL_YIELD"]);
     expect(result.errors[0]?.field).toBe("actualYieldMolInput");
     expect("participants" in result).toBe(false);
+  });
+
+  it("calculates concentration and gas conversions using runtime temperature and pressure", () => {
+    const result = calculateStoichiometry({
+      participants: [
+        {
+          id: "reactant-gas",
+          label: "Gas Reactant",
+          role: "reactant",
+          stoichCoeffInput: "1",
+          amountMolInput: "1",
+          phase: "gas",
+          volumeLInput: "24.4653953247",
+        },
+        {
+          id: "product-gas",
+          label: "Gas Product",
+          role: "product",
+          stoichCoeffInput: "1",
+          amountMolInput: "1",
+          phase: "gas",
+          volumeLInput: "24.4653953247",
+          actualYieldMolInput: "1",
+        },
+      ],
+      runtimeSettings: {
+        temperatureC: 25,
+        pressureAtm: 1,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+
+    expect(result.derivedCalculations.concentrations).toHaveLength(2);
+    expect(result.derivedCalculations.concentrations[0]?.concentrationMolL).toBeCloseTo(
+      0.0408740585,
+      10,
+    );
+    expect(result.derivedCalculations.gasRuntime).not.toBeNull();
+    expect(result.derivedCalculations.gasRuntime?.temperatureK).toBeCloseTo(298.15, 8);
+    expect(result.derivedCalculations.gasRuntime?.pressureAtm).toBe(1);
+    expect(result.derivedCalculations.gasCalculations).toHaveLength(2);
+    expect(result.derivedCalculations.gasCalculations[0]?.idealVolumeL).toBeCloseTo(
+      24.4653953247,
+      10,
+    );
+    expect(result.derivedCalculations.gasCalculations[0]?.impliedAmountMolFromVolume).toBeCloseTo(
+      1,
+      10,
+    );
+    expect(result.derivedCalculations.gasCalculations[0]?.isVolumeConsistent).toBe(true);
+    expect(result.derivedCalculations.gasCalculations[0]?.isAmountConsistent).toBe(true);
+  });
+
+  it("returns explicit validation errors when gas calculations are requested without runtime T/P", () => {
+    const result = calculateStoichiometry({
+      participants: [
+        {
+          id: "reactant-gas",
+          label: "Gas Reactant",
+          role: "reactant",
+          stoichCoeffInput: "1",
+          amountMolInput: "1",
+          phase: "gas",
+          volumeLInput: "22.4",
+        },
+        {
+          id: "product-gas",
+          label: "Gas Product",
+          role: "product",
+          stoichCoeffInput: "1",
+          amountMolInput: "1",
+          phase: "gas",
+          volumeLInput: "22.4",
+          actualYieldMolInput: "1",
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+
+    expect(result.errors.map((error) => error.code)).toEqual([
+      "MISSING_TEMPERATURE_C",
+      "MISSING_PRESSURE_ATM",
+    ]);
+    expect(result.errors[0]?.field).toBe("temperatureC");
+    expect(result.errors[1]?.field).toBe("pressureAtm");
+  });
+
+  it("returns explicit validation error when gas/concentration volume is non-positive", () => {
+    const result = calculateStoichiometry({
+      participants: [
+        {
+          id: "reactant-gas",
+          label: "Gas Reactant",
+          role: "reactant",
+          stoichCoeffInput: "1",
+          amountMolInput: "1",
+          phase: "gas",
+          volumeLInput: "0",
+        },
+        {
+          id: "product-liquid",
+          label: "Liquid Product",
+          role: "product",
+          stoichCoeffInput: "1",
+          amountMolInput: "1",
+          phase: "liquid",
+          actualYieldMolInput: "1",
+        },
+      ],
+      runtimeSettings: {
+        temperatureC: 25,
+        pressureAtm: 1,
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+
+    expect(result.errors.map((error) => error.code)).toEqual(["NON_POSITIVE_VOLUME_L"]);
+    expect(result.errors[0]?.field).toBe("volumeLInput");
+  });
+
+  it("returns explicit validation error when participant phase is unsupported", () => {
+    const result = calculateStoichiometry({
+      participants: [
+        {
+          id: "reactant-invalid-phase",
+          label: "Invalid phase",
+          role: "reactant",
+          stoichCoeffInput: "1",
+          amountMolInput: "1",
+          phase: "plasma",
+        },
+        {
+          id: "product-valid",
+          label: "Product",
+          role: "product",
+          stoichCoeffInput: "1",
+          amountMolInput: "1",
+          actualYieldMolInput: "1",
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+
+    expect(result.errors.map((error) => error.code)).toEqual(["INVALID_PHASE"]);
+    expect(result.errors[0]?.field).toBe("phase");
   });
 });
 

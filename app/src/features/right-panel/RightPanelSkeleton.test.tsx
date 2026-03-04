@@ -92,6 +92,48 @@ describe("RightPanelSkeleton stoichiometry summary", () => {
           remainingAmountMol: null,
         },
       ],
+      derivedCalculations: {
+        concentrations: [
+          {
+            participantId: "reactant-h2",
+            participantLabel: "H2",
+            role: "reactant",
+            phase: "gas",
+            amountMol: 5,
+            volumeL: 112,
+            concentrationMolL: 0.0446428571,
+          },
+          {
+            participantId: "product-h2o",
+            participantLabel: "H2O",
+            role: "product",
+            phase: "liquid",
+            amountMol: 1.8,
+            volumeL: 2,
+            concentrationMolL: 0.9,
+          },
+        ],
+        gasRuntime: {
+          temperatureC: 25,
+          temperatureK: 298.15,
+          pressureAtm: 1,
+          gasConstantLAtmPerMolK: 0.082057338,
+        },
+        gasCalculations: [
+          {
+            participantId: "reactant-h2",
+            participantLabel: "H2",
+            amountMolInput: 5,
+            volumeLInput: 112,
+            idealVolumeL: 122.3269766235,
+            impliedAmountMolFromVolume: 4.577141,
+            volumeDeltaL: -10.3269766235,
+            amountDeltaMol: 0.422859,
+            isVolumeConsistent: false,
+            isAmountConsistent: false,
+          },
+        ],
+      },
     };
 
     const html = renderToStaticMarkup(
@@ -111,6 +153,13 @@ describe("RightPanelSkeleton stoichiometry summary", () => {
     expect(html).toContain('data-testid="right-panel-summary-stoichiometry-yields"');
     expect(html).toContain("% yield");
     expect(html).toContain("% yield 90");
+    expect(html).toContain('data-testid="right-panel-summary-stoichiometry-concentrations"');
+    expect(html).toContain("Concentrations from entered amount/volume:");
+    expect(html).toContain("0.9");
+    expect(html).toContain('data-testid="right-panel-summary-stoichiometry-gas-runtime"');
+    expect(html).toContain("Gas calculations at 25");
+    expect(html).toContain('data-testid="right-panel-summary-stoichiometry-gas"');
+    expect(html).toContain("consistency check inputs.");
     expect(html).toContain("Units: amounts and reaction extent in");
   });
 

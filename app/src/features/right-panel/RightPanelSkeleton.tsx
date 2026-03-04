@@ -438,6 +438,73 @@ function RightPanelSkeleton({
                               </li>
                             ))}
                         </ul>
+
+                        {stoichiometryResult.derivedCalculations.concentrations.length ===
+                        0 ? null : (
+                          <>
+                            <p className="status-line">
+                              Concentrations from entered amount/volume:
+                            </p>
+                            <ul
+                              className="status-list"
+                              data-testid="right-panel-summary-stoichiometry-concentrations"
+                            >
+                              {stoichiometryResult.derivedCalculations.concentrations.map(
+                                (concentration) => (
+                                  <li key={`${concentration.participantId}-concentration`}>
+                                    {concentration.participantLabel}:{" "}
+                                    {formatStoichiometryValue(concentration.concentrationMolL)}{" "}
+                                    {stoichiometryResult.units.concentration}
+                                  </li>
+                                ),
+                              )}
+                            </ul>
+                          </>
+                        )}
+
+                        {stoichiometryResult.derivedCalculations.gasRuntime === null ||
+                        stoichiometryResult.derivedCalculations.gasCalculations.length ===
+                          0 ? null : (
+                          <>
+                            <p
+                              className="status-line"
+                              data-testid="right-panel-summary-stoichiometry-gas-runtime"
+                            >
+                              Gas calculations at{" "}
+                              {formatStoichiometryValue(
+                                stoichiometryResult.derivedCalculations.gasRuntime.temperatureC,
+                              )}{" "}
+                              &deg;C and{" "}
+                              {formatStoichiometryValue(
+                                stoichiometryResult.derivedCalculations.gasRuntime.pressureAtm,
+                              )}{" "}
+                              atm (ideal gas).
+                            </p>
+                            <ul
+                              className="status-list"
+                              data-testid="right-panel-summary-stoichiometry-gas"
+                            >
+                              {stoichiometryResult.derivedCalculations.gasCalculations.map(
+                                (gasCalculation) => (
+                                  <li key={`${gasCalculation.participantId}-gas`}>
+                                    {gasCalculation.participantLabel}: ideal V{" "}
+                                    {formatStoichiometryValue(gasCalculation.idealVolumeL)}{" "}
+                                    {stoichiometryResult.units.volume}, implied n{" "}
+                                    {formatStoichiometryValue(
+                                      gasCalculation.impliedAmountMolFromVolume,
+                                    )}{" "}
+                                    {stoichiometryResult.units.amount}, consistency{" "}
+                                    {gasCalculation.isVolumeConsistent &&
+                                    gasCalculation.isAmountConsistent
+                                      ? "ok"
+                                      : "check inputs"}
+                                    .
+                                  </li>
+                                ),
+                              )}
+                            </ul>
+                          </>
+                        )}
                       </>
                     ) : (
                       <>
@@ -463,8 +530,13 @@ function RightPanelSkeleton({
                       data-testid="right-panel-summary-stoichiometry-units"
                     >
                       Units: amounts and reaction extent in {stoichiometryResult.units.amount};
-                      coefficients as {stoichiometryResult.units.coefficient}; percent yield in{" "}
-                      {stoichiometryResult.units.percentYield}.
+                      concentrations in {stoichiometryResult.units.concentration}; gas volumes in{" "}
+                      {stoichiometryResult.units.volume}; coefficients as{" "}
+                      {stoichiometryResult.units.coefficient}; percent yield in{" "}
+                      {stoichiometryResult.units.percentYield}; pressure in{" "}
+                      {stoichiometryResult.units.pressure}; temperature in{" "}
+                      {stoichiometryResult.units.temperature}; gas constant in{" "}
+                      {stoichiometryResult.units.gasConstant}.
                     </p>
                     <ul
                       className="status-list"
