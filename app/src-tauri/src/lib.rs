@@ -46,6 +46,9 @@ pub fn run() {
             ipc_v1::create_substance_v1,
             ipc_v1::update_substance_v1,
             ipc_v1::delete_substance_v1,
+            ipc_v1::save_scenario_draft_v1,
+            ipc_v1::list_saved_scenarios_v1,
+            ipc_v1::load_scenario_draft_v1,
             ipc_v1::query_substances_v1
         ])
         .run(tauri::generate_context!())

@@ -50,14 +50,19 @@ import {
   healthV1,
   isCommandErrorV1,
   listPresetsV1,
+  listScenariosV1,
   listSubstancesV1,
+  loadScenarioV1,
   resolveFeatureFlagsV1,
+  saveScenarioV1,
   toUserFacingMessageV1,
   updateSubstanceV1,
 } from "./shared/contracts/ipc/client";
 import type {
   CommandErrorV1,
   PresetCatalogEntryV1,
+  ScenarioPayloadV1,
+  ScenarioSummaryV1,
   SubstanceCatalogEntryV1,
   SubstancePhaseV1,
   SubstanceSourceV1,
@@ -102,6 +107,7 @@ const DEFAULT_RUNTIME_SETTINGS: Readonly<RightPanelRuntimeSettings> = {
   precisionProfile: "Balanced",
   fpsLimit: 60,
 };
+const GENERATED_SCENARIO_NAME_SUFFIX_PATTERN = /\s\[\d{10,}\]$/;
 
 const MIN_TEMPERATURE_C = -273.15;
 const MAX_TEMPERATURE_C = 1000;
@@ -126,6 +132,11 @@ type LaunchValidationModel = {
   sections: ReadonlyArray<LaunchValidationSection>;
   hasErrors: boolean;
   firstError: string | null;
+};
+
+type BuilderRuntimeSnapshot = {
+  builderDraft: BuilderDraft;
+  runtimeSettings: RightPanelRuntimeSettings;
 };
 
 function createBuilderParticipantLabelLookup(
@@ -591,6 +602,88 @@ function sortPresetsByTitle(
   });
 }
 
+function parseScenarioTimestamp(value: string): number {
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    return 0;
+  }
+
+  if (/^\d+$/.test(normalized)) {
+    const unixMillis = Number(normalized);
+    return Number.isFinite(unixMillis) ? unixMillis : 0;
+  }
+
+  const parsed = Date.parse(normalized);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function stripGeneratedScenarioNameSuffix(name: string): string {
+  let normalized = name.trim();
+  while (GENERATED_SCENARIO_NAME_SUFFIX_PATTERN.test(normalized)) {
+    normalized = normalized.replace(GENERATED_SCENARIO_NAME_SUFFIX_PATTERN, "").trim();
+  }
+
+  return normalized;
+}
+
+function cloneBuilderDraft(draft: BuilderDraft): BuilderDraft {
+  return {
+    ...draft,
+    participants: draft.participants.map((participant) => ({
+      ...participant,
+    })),
+  };
+}
+
+function cloneRuntimeSettings(settings: RightPanelRuntimeSettings): RightPanelRuntimeSettings {
+  return {
+    ...settings,
+  };
+}
+
+function createBuilderRuntimeSnapshot(
+  draft: BuilderDraft,
+  runtimeSettings: RightPanelRuntimeSettings,
+): BuilderRuntimeSnapshot {
+  return {
+    builderDraft: cloneBuilderDraft(draft),
+    runtimeSettings: cloneRuntimeSettings(runtimeSettings),
+  };
+}
+
+function createScenarioPayloadFromSnapshot(snapshot: BuilderRuntimeSnapshot): ScenarioPayloadV1 {
+  return {
+    builderDraft: cloneBuilderDraft(snapshot.builderDraft),
+    runtimeSettings: cloneRuntimeSettings(snapshot.runtimeSettings),
+  };
+}
+
+function createSnapshotFromScenarioPayload(payload: ScenarioPayloadV1): BuilderRuntimeSnapshot {
+  return {
+    builderDraft: cloneBuilderDraft(payload.builderDraft),
+    runtimeSettings: cloneRuntimeSettings(payload.runtimeSettings),
+  };
+}
+
+function sortScenariosByUpdatedAt(
+  scenarios: ReadonlyArray<ScenarioSummaryV1>,
+): ReadonlyArray<ScenarioSummaryV1> {
+  return [...scenarios].sort((left, right) => {
+    const updatedOrder =
+      parseScenarioTimestamp(right.updatedAt) - parseScenarioTimestamp(left.updatedAt);
+    if (updatedOrder !== 0) {
+      return updatedOrder;
+    }
+
+    const nameOrder = left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
+    if (nameOrder !== 0) {
+      return nameOrder;
+    }
+
+    return left.id.localeCompare(right.id, undefined, { sensitivity: "base" });
+  });
+}
+
 function App() {
   const [activeLeftPanelTab, setActiveLeftPanelTab] =
     useState<LeftPanelTabId>(readStoredLeftPanelTab);
@@ -605,6 +698,7 @@ function App() {
   );
   const [runtimeSettings, setRuntimeSettings] =
     useState<RightPanelRuntimeSettings>(DEFAULT_RUNTIME_SETTINGS);
+  const [rightPanelSyncRevision, setRightPanelSyncRevision] = useState(0);
   const [allSubstances, setAllSubstances] = useState<ReadonlyArray<SubstanceCatalogEntryV1>>([]);
   const [allPresets, setAllPresets] = useState<ReadonlyArray<PresetCatalogEntryV1>>([]);
   const [librarySearchQuery, setLibrarySearchQuery] = useState("");
@@ -626,6 +720,13 @@ function App() {
   const [presetsLoadError, setPresetsLoadError] = useState<string | null>(null);
   const [builderDraft, setBuilderDraft] = useState<BuilderDraft | null>(null);
   const [builderCopyFeedbackMessage, setBuilderCopyFeedbackMessage] = useState<string | null>(null);
+  const [savedScenarios, setSavedScenarios] = useState<ReadonlyArray<ScenarioSummaryV1>>([]);
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
+  const [scenarioNameInput, setScenarioNameInput] = useState("");
+  const [scenarioActionState, setScenarioActionState] = useState<"idle" | "saving" | "loading">(
+    "idle",
+  );
+  const [baselineSnapshot, setBaselineSnapshot] = useState<BuilderRuntimeSnapshot | null>(null);
   const [createSubstanceDraft, setCreateSubstanceDraft] = useState<UserSubstanceDraft>(
     createDefaultUserSubstanceDraft,
   );
@@ -783,6 +884,27 @@ function App() {
         enqueueNotification("error", message);
       });
 
+    listScenariosV1()
+      .then((result) => {
+        if (disposed) {
+          return;
+        }
+
+        setSavedScenarios(sortScenariosByUpdatedAt(result.scenarios));
+      })
+      .catch((error: unknown) => {
+        if (disposed) {
+          return;
+        }
+
+        if (isCommandErrorV1(error)) {
+          enqueueNotification("error", `Scenario list error: ${formatCommandError(error)}`);
+          return;
+        }
+
+        enqueueNotification("error", `Scenario list error: ${String(error)}`);
+      });
+
     return () => {
       disposed = true;
     };
@@ -934,6 +1056,24 @@ function App() {
   }, [resolvedSelectedPresetId, selectedPresetId]);
 
   useEffect(() => {
+    if (savedScenarios.length === 0) {
+      if (selectedScenarioId !== null) {
+        setSelectedScenarioId(null);
+      }
+      return;
+    }
+
+    if (
+      selectedScenarioId !== null &&
+      savedScenarios.some((scenario) => scenario.id === selectedScenarioId)
+    ) {
+      return;
+    }
+
+    setSelectedScenarioId(savedScenarios[0]?.id ?? null);
+  }, [savedScenarios, selectedScenarioId]);
+
+  useEffect(() => {
     if (builderDraftHydratedRef.current) {
       return;
     }
@@ -1010,6 +1150,13 @@ function App() {
   const presetsEmptyMessage = "No presets are available in the local preset library.";
 
   const builderEmptyMessage = 'Select a preset and click "Use in Builder" to start editing.';
+  const isScenarioBusy = scenarioActionState !== "idle";
+  const canSaveScenario =
+    builderDraft !== null && scenarioNameInput.trim().length > 0 && !isScenarioBusy;
+  const canLoadScenario =
+    selectedScenarioId !== null && savedScenarios.length > 0 && !isScenarioBusy;
+  const canSetBaselineSnapshot = builderDraft !== null && !isScenarioBusy;
+  const canRevertToBaseline = baselineSnapshot !== null && !isScenarioBusy;
 
   const handleLibraryPhaseToggle = useCallback((phase: SubstancePhaseV1): void => {
     setSelectedLibraryPhases((currentSelection) => toggleFilterValue(currentSelection, phase));
@@ -1097,6 +1244,118 @@ function App() {
     enqueueNotification("info", "Builder draft saved to local storage.");
   }, [builderDraft, enqueueNotification]);
 
+  const handleSaveScenario = useCallback(async (): Promise<void> => {
+    if (builderDraft === null) {
+      enqueueNotification("warn", "Builder draft is empty. Add data before saving a scenario.");
+      return;
+    }
+
+    const normalizedScenarioName = stripGeneratedScenarioNameSuffix(scenarioNameInput);
+    if (normalizedScenarioName.length === 0) {
+      enqueueNotification("warn", "Enter a scenario name before saving.");
+      return;
+    }
+
+    const snapshot = createBuilderRuntimeSnapshot(builderDraft, runtimeSettings);
+    setScenarioActionState("saving");
+
+    try {
+      const result = await saveScenarioV1({
+        name: normalizedScenarioName,
+        payload: createScenarioPayloadFromSnapshot(snapshot),
+      });
+
+      setSavedScenarios((currentScenarios) =>
+        sortScenariosByUpdatedAt([
+          ...currentScenarios.filter((scenario) => scenario.id !== result.scenario.id),
+          result.scenario,
+        ]),
+      );
+      setSelectedScenarioId(result.scenario.id);
+      setScenarioNameInput(normalizedScenarioName);
+      setBaselineSnapshot(snapshot);
+
+      try {
+        const scenariosResult = await listScenariosV1();
+        setSavedScenarios(sortScenariosByUpdatedAt(scenariosResult.scenarios));
+      } catch (refreshError: unknown) {
+        const refreshMessage = isCommandErrorV1(refreshError)
+          ? formatCommandError(refreshError)
+          : String(refreshError);
+        enqueueNotification("warn", `Scenario saved, but refresh failed: ${refreshMessage}`);
+      }
+
+      enqueueNotification(
+        "info",
+        `Scenario "${normalizedScenarioName}" saved. Baseline snapshot updated.`,
+      );
+    } catch (error: unknown) {
+      const message = isCommandErrorV1(error)
+        ? `Save scenario error: ${formatCommandError(error)}`
+        : `Save scenario error: ${String(error)}`;
+      enqueueNotification("error", message);
+    } finally {
+      setScenarioActionState("idle");
+    }
+  }, [builderDraft, enqueueNotification, runtimeSettings, scenarioNameInput]);
+
+  const handleLoadScenario = useCallback(async (): Promise<void> => {
+    if (selectedScenarioId === null) {
+      enqueueNotification("warn", "Choose a saved scenario before loading.");
+      return;
+    }
+
+    setScenarioActionState("loading");
+
+    try {
+      const result = await loadScenarioV1({
+        id: selectedScenarioId,
+      });
+      const snapshot = createSnapshotFromScenarioPayload(result.payload);
+
+      setBuilderDraft(snapshot.builderDraft);
+      setRuntimeSettings(snapshot.runtimeSettings);
+      setRightPanelSyncRevision((current) => current + 1);
+      setScenarioNameInput(stripGeneratedScenarioNameSuffix(result.scenarioName));
+      setSelectedScenarioId(result.scenarioId);
+      setBaselineSnapshot(snapshot);
+      setBuilderCopyFeedbackMessage(null);
+      enqueueNotification(
+        "info",
+        `Scenario "${result.scenarioName}" loaded into Builder and set as baseline snapshot.`,
+      );
+    } catch (error: unknown) {
+      const message = isCommandErrorV1(error)
+        ? `Load scenario error: ${formatCommandError(error)}`
+        : `Load scenario error: ${String(error)}`;
+      enqueueNotification("error", message);
+    } finally {
+      setScenarioActionState("idle");
+    }
+  }, [enqueueNotification, selectedScenarioId]);
+
+  const handleSetBaselineSnapshot = useCallback((): void => {
+    if (builderDraft === null) {
+      enqueueNotification("warn", "Builder draft is empty. Cannot set baseline snapshot.");
+      return;
+    }
+
+    setBaselineSnapshot(createBuilderRuntimeSnapshot(builderDraft, runtimeSettings));
+    enqueueNotification("info", "Baseline snapshot updated.");
+  }, [builderDraft, enqueueNotification, runtimeSettings]);
+
+  const handleRevertToBaseline = useCallback((): void => {
+    if (baselineSnapshot === null) {
+      enqueueNotification("warn", "Baseline snapshot is not set yet.");
+      return;
+    }
+
+    setBuilderDraft(cloneBuilderDraft(baselineSnapshot.builderDraft));
+    setRuntimeSettings(cloneRuntimeSettings(baselineSnapshot.runtimeSettings));
+    setRightPanelSyncRevision((current) => current + 1);
+    enqueueNotification("info", "Reverted Builder and runtime settings to baseline snapshot.");
+  }, [baselineSnapshot, enqueueNotification]);
+
   const handleUsePresetInBuilder = useCallback(
     (presetId: string): void => {
       const preset = allPresets.find((candidate) => candidate.id === presetId);
@@ -1110,6 +1369,7 @@ function App() {
       setSelectedPresetId(preset.id);
       setBuilderDraft(createBuilderDraftFromPreset(preset));
       setBuilderCopyFeedbackMessage(createBuilderCopyFeedbackMessage(preset.title));
+      setScenarioNameInput(preset.title);
       setActiveLeftPanelTab("builder");
       enqueueNotification("info", `Preset "${preset.title}" loaded into Builder as editable copy.`);
     },
@@ -1330,6 +1590,24 @@ function App() {
               copyFeedbackMessage: builderCopyFeedbackMessage,
               launchBlocked: isBuilderLaunchBlocked,
               launchBlockReasons: builderLaunchValidationErrors,
+              scenarioNameInput,
+              onScenarioNameInputChange: setScenarioNameInput,
+              savedScenarios,
+              selectedScenarioId,
+              onSelectScenario: setSelectedScenarioId,
+              onSaveScenario: () => {
+                void handleSaveScenario();
+              },
+              onLoadScenario: () => {
+                void handleLoadScenario();
+              },
+              onSetBaselineSnapshot: handleSetBaselineSnapshot,
+              onRevertToBaseline: handleRevertToBaseline,
+              canSaveScenario,
+              canLoadScenario,
+              canSetBaselineSnapshot,
+              canRevertToBaseline,
+              isScenarioBusy,
               emptyMessage: builderEmptyMessage,
             }}
             presetsViewModel={{
@@ -1454,8 +1732,10 @@ function App() {
         }
         rightPanel={
           <RightPanelSkeleton
+            key={`right-panel-${rightPanelSyncRevision.toString()}`}
             healthMessage={healthMsg}
             featureStatuses={rightPanelFeatureStatuses}
+            runtimeSettings={runtimeSettings}
             onRuntimeSettingsChange={handleRuntimeSettingsChange}
           />
         }

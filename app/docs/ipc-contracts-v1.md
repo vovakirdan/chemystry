@@ -123,6 +123,68 @@ This document defines the baseline versioned IPC contracts shared by frontend an
 }
 ```
 
+### `SaveScenarioDraftV1Input`
+
+```json
+{
+  "scenarioId": "string (optional; when present updates existing scenario)",
+  "scenarioName": "string (required, trimmed)",
+  "builder": "object (required)",
+  "runtime": "object (required)"
+}
+```
+
+### `SaveScenarioDraftV1Output`
+
+```json
+{
+  "version": "v1",
+  "requestId": "string",
+  "scenarioId": "string",
+  "scenarioName": "string (timestamp-suffixed unique name)",
+  "createdAt": "string",
+  "updated": "boolean"
+}
+```
+
+### `ListSavedScenariosV1Output`
+
+```json
+{
+  "version": "v1",
+  "requestId": "string",
+  "scenarios": [
+    {
+      "id": "string",
+      "name": "string",
+      "createdAt": "string",
+      "updatedAt": "string | null"
+    }
+  ]
+}
+```
+
+### `LoadScenarioDraftV1Input`
+
+```json
+{
+  "scenarioId": "string"
+}
+```
+
+### `LoadScenarioDraftV1Output`
+
+```json
+{
+  "version": "v1",
+  "requestId": "string",
+  "scenarioId": "string",
+  "scenarioName": "string",
+  "builder": "object",
+  "runtime": "object"
+}
+```
+
 ### `ListPresetsV1Output`
 
 ```json
@@ -154,6 +216,9 @@ This document defines the baseline versioned IPC contracts shared by frontend an
 | `create_substance_v1` | `CreateSubstanceV1Input` | `SubstanceMutationV1Output` | `CommandErrorV1` |
 | `update_substance_v1` | `UpdateSubstanceV1Input` | `SubstanceMutationV1Output` | `CommandErrorV1` |
 | `delete_substance_v1` | `DeleteSubstanceV1Input` | `DeleteSubstanceV1Output` | `CommandErrorV1` |
+| `save_scenario_draft_v1` | `SaveScenarioDraftV1Input` | `SaveScenarioDraftV1Output` | `CommandErrorV1` |
+| `list_saved_scenarios_v1` | `{}` | `ListSavedScenariosV1Output` | `CommandErrorV1` |
+| `load_scenario_draft_v1` | `LoadScenarioDraftV1Input` | `LoadScenarioDraftV1Output` | `CommandErrorV1` |
 
 ## Validation Baseline (Rust Side)
 

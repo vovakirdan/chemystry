@@ -17,14 +17,55 @@ import {
   greetV1,
   healthV1,
   isCommandErrorV1,
+  listScenariosV1,
   listPresetsV1,
   listSubstancesV1,
+  loadScenarioV1,
   normalizeCommandErrorV1,
   resolveFeatureFlagsV1,
+  saveScenarioV1,
   toUserFacingMessageV1,
   updateSubstanceV1,
 } from "./client";
 import { IPC_COMMANDS_V1, IPC_CONTRACT_VERSION_V1, type CommandErrorV1 } from "./v1";
+
+const SAMPLE_SCENARIO_PAYLOAD = {
+  builderDraft: {
+    title: "Hydrogen combustion",
+    reactionClass: "redox" as const,
+    equation: "2H2 + O2 -> 2H2O",
+    description: "Builder snapshot",
+    participants: [
+      {
+        id: "participant-1",
+        substanceId: "builtin-substance-hydrogen",
+        role: "reactant" as const,
+        stoichCoeffInput: "2",
+        phase: "gas" as const,
+        amountMolInput: "1",
+        massGInput: "2.01588",
+        volumeLInput: "22.4",
+      },
+      {
+        id: "participant-2",
+        substanceId: "builtin-substance-oxygen",
+        role: "reactant" as const,
+        stoichCoeffInput: "1",
+        phase: "gas" as const,
+        amountMolInput: "0.5",
+        massGInput: "16",
+        volumeLInput: "11.2",
+      },
+    ],
+  },
+  runtimeSettings: {
+    temperatureC: 25,
+    pressureAtm: 1,
+    calculationPasses: 250,
+    precisionProfile: "Balanced" as const,
+    fpsLimit: 60,
+  },
+};
 
 describe("ipc v1 client", () => {
   beforeEach(() => {
@@ -268,6 +309,165 @@ describe("ipc v1 client", () => {
       requestId: "req-presets-invalid",
       category: "internal",
       code: "INVALID_PRESET_PAYLOAD",
+    });
+  });
+
+  it("invokes list_scenarios_v1 and normalizes summary aliases", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-scenarios",
+      scenarios: [
+        {
+          id: "scenario-run-1",
+          name: "Hydrogen what-if",
+          created_at: "2026-03-04T09:00:00Z",
+          updated_at: "2026-03-04T09:10:00Z",
+        },
+      ],
+    });
+
+    await expect(listScenariosV1()).resolves.toEqual({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-scenarios",
+      scenarios: [
+        {
+          id: "scenario-run-1",
+          name: "Hydrogen what-if",
+          createdAt: "2026-03-04T09:00:00Z",
+          updatedAt: "2026-03-04T09:10:00Z",
+        },
+      ],
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith(IPC_COMMANDS_V1.listScenarios, {
+      input: {},
+    });
+  });
+
+  it("rejects list_scenarios_v1 payloads with invalid summary format", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-scenarios-invalid",
+      scenarios: [
+        {
+          id: "scenario-run-invalid",
+          name: "",
+          createdAt: "2026-03-04T09:00:00Z",
+          updatedAt: "2026-03-04T09:10:00Z",
+        },
+      ],
+    });
+
+    await expect(listScenariosV1()).rejects.toMatchObject({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-scenarios-invalid",
+      category: "internal",
+      code: "INVALID_SCENARIO_PAYLOAD",
+    });
+  });
+
+  it("invokes save_scenario_draft_v1 with mapped input payload and parses summary", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-save-scenario",
+      scenarioId: "scenario-run-saved",
+      scenarioName: "Hydrogen what-if [1741089000000]",
+      createdAt: "2026-03-04T09:00:00Z",
+      updated: false,
+    });
+
+    await expect(
+      saveScenarioV1({
+        name: "Hydrogen what-if",
+        payload: SAMPLE_SCENARIO_PAYLOAD,
+      }),
+    ).resolves.toEqual({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-save-scenario",
+      scenario: {
+        id: "scenario-run-saved",
+        name: "Hydrogen what-if [1741089000000]",
+        createdAt: "2026-03-04T09:00:00Z",
+        updatedAt: "2026-03-04T09:00:00Z",
+      },
+      updated: false,
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith(IPC_COMMANDS_V1.saveScenario, {
+      input: {
+        scenarioName: "Hydrogen what-if",
+        builder: SAMPLE_SCENARIO_PAYLOAD.builderDraft,
+        runtime: SAMPLE_SCENARIO_PAYLOAD.runtimeSettings,
+      },
+    });
+  });
+
+  it("rejects save_scenario_v1 payloads with invalid response format", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-save-scenario-invalid",
+      scenarioId: "",
+      scenarioName: "Hydrogen what-if",
+      createdAt: "2026-03-04T09:00:00Z",
+      updated: false,
+    });
+
+    await expect(
+      saveScenarioV1({
+        name: "Hydrogen what-if",
+        payload: SAMPLE_SCENARIO_PAYLOAD,
+      }),
+    ).rejects.toMatchObject({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-save-scenario-invalid",
+      category: "internal",
+      code: "INVALID_SCENARIO_PAYLOAD",
+    });
+  });
+
+  it("invokes load_scenario_draft_v1 and parses scenario payload snapshot", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-load-scenario",
+      scenarioId: "scenario-run-saved",
+      scenarioName: "Hydrogen what-if",
+      builder: SAMPLE_SCENARIO_PAYLOAD.builderDraft,
+      runtime: SAMPLE_SCENARIO_PAYLOAD.runtimeSettings,
+    });
+
+    await expect(loadScenarioV1({ id: "scenario-run-saved" })).resolves.toEqual({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-load-scenario",
+      scenarioId: "scenario-run-saved",
+      scenarioName: "Hydrogen what-if",
+      payload: SAMPLE_SCENARIO_PAYLOAD,
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith(IPC_COMMANDS_V1.loadScenario, {
+      input: {
+        scenarioId: "scenario-run-saved",
+      },
+    });
+  });
+
+  it("rejects load_scenario_v1 payloads with invalid runtime precision profile", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-load-scenario-invalid",
+      scenarioId: "scenario-run-saved",
+      scenarioName: "Hydrogen what-if",
+      builder: SAMPLE_SCENARIO_PAYLOAD.builderDraft,
+      runtime: {
+        ...SAMPLE_SCENARIO_PAYLOAD.runtimeSettings,
+        precisionProfile: "Ultra Precision",
+      },
+    });
+
+    await expect(loadScenarioV1({ id: "scenario-run-saved" })).rejects.toMatchObject({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-load-scenario-invalid",
+      category: "internal",
+      code: "INVALID_SCENARIO_PAYLOAD",
     });
   });
 

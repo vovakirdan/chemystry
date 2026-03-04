@@ -65,6 +65,24 @@ type LeftPanelBuilderViewModel = {
   copyFeedbackMessage: string | null;
   launchBlocked: boolean;
   launchBlockReasons: ReadonlyArray<string>;
+  scenarioNameInput: string;
+  onScenarioNameInputChange: (value: string) => void;
+  savedScenarios: ReadonlyArray<{
+    id: string;
+    name: string;
+    updatedAt: string;
+  }>;
+  selectedScenarioId: string | null;
+  onSelectScenario: (scenarioId: string | null) => void;
+  onSaveScenario: () => void;
+  onLoadScenario: () => void;
+  onSetBaselineSnapshot: () => void;
+  onRevertToBaseline: () => void;
+  canSaveScenario: boolean;
+  canLoadScenario: boolean;
+  canSetBaselineSnapshot: boolean;
+  canRevertToBaseline: boolean;
+  isScenarioBusy: boolean;
   emptyMessage: string;
 };
 
@@ -172,6 +190,32 @@ function formatMolarMass(value: number | null): string {
 
 function formatBuilderSubstanceOption(substance: SubstanceCatalogEntryV1): string {
   return `${substance.name} (${substance.formula})`;
+}
+
+function formatScenarioTimestampForLabel(value: string): string {
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    return value;
+  }
+
+  if (/^\d+$/.test(normalized)) {
+    const unixMillis = Number(normalized);
+    if (Number.isFinite(unixMillis)) {
+      return new Date(unixMillis).toISOString();
+    }
+    return value;
+  }
+
+  const parsed = Date.parse(normalized);
+  if (Number.isNaN(parsed)) {
+    return value;
+  }
+
+  return new Date(parsed).toISOString();
+}
+
+function formatScenarioOptionLabel(name: string, updatedAt: string): string {
+  return `${name} (${formatScenarioTimestampForLabel(updatedAt)})`;
 }
 
 type SubstanceEditorFormModel = {
@@ -589,6 +633,8 @@ function renderBuilderView(
     return null;
   }
 
+  const scenariosAvailable = builderViewModel.savedScenarios.length > 0;
+
   return (
     <div className="left-panel-builder-view" data-testid="left-panel-builder-view">
       <div
@@ -903,6 +949,94 @@ function renderBuilderView(
                 Add participant
               </button>
             </form>
+          </section>
+
+          <section className="left-panel-builder-scenarios" data-testid="builder-scenario-controls">
+            <h5 className="left-panel-library-form-title">Scenario snapshots</h5>
+
+            <label>
+              Scenario name
+              <input
+                type="text"
+                value={builderViewModel.scenarioNameInput}
+                onChange={(event) =>
+                  builderViewModel.onScenarioNameInputChange(event.currentTarget.value)
+                }
+                data-testid="builder-scenario-name-input"
+                disabled={builderViewModel.isScenarioBusy}
+              />
+            </label>
+
+            <button
+              type="button"
+              onClick={builderViewModel.onSaveScenario}
+              data-testid="builder-scenario-save-button"
+              disabled={!builderViewModel.canSaveScenario || builderViewModel.isScenarioBusy}
+            >
+              Save scenario
+            </button>
+
+            <label>
+              Saved scenarios
+              <select
+                value={builderViewModel.selectedScenarioId ?? ""}
+                onChange={(event) => {
+                  const selectedScenarioId = event.currentTarget.value;
+                  builderViewModel.onSelectScenario(
+                    selectedScenarioId.length === 0 ? null : selectedScenarioId,
+                  );
+                }}
+                data-testid="builder-scenario-list-select"
+                disabled={!scenariosAvailable || builderViewModel.isScenarioBusy}
+              >
+                {scenariosAvailable ? (
+                  builderViewModel.savedScenarios.map((scenario) => (
+                    <option
+                      key={scenario.id}
+                      value={scenario.id}
+                      data-testid={`builder-scenario-option-${scenario.id}`}
+                    >
+                      {formatScenarioOptionLabel(scenario.name, scenario.updatedAt)}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">No saved scenarios</option>
+                )}
+              </select>
+            </label>
+
+            <button
+              type="button"
+              onClick={builderViewModel.onLoadScenario}
+              data-testid="builder-scenario-load-button"
+              disabled={!builderViewModel.canLoadScenario || builderViewModel.isScenarioBusy}
+            >
+              Load
+            </button>
+
+            <div
+              className="left-panel-builder-scenario-baseline-actions"
+              data-testid="builder-scenario-baseline-actions"
+            >
+              <button
+                type="button"
+                onClick={builderViewModel.onSetBaselineSnapshot}
+                data-testid="builder-scenario-set-baseline-button"
+                disabled={
+                  !builderViewModel.canSetBaselineSnapshot || builderViewModel.isScenarioBusy
+                }
+              >
+                Set baseline snapshot
+              </button>
+              <button
+                type="button"
+                onClick={builderViewModel.onRevertToBaseline}
+                data-testid="builder-scenario-revert-baseline-button"
+                disabled={!builderViewModel.canRevertToBaseline || builderViewModel.isScenarioBusy}
+              >
+                Revert to baseline
+              </button>
+            </div>
           </section>
 
           <button

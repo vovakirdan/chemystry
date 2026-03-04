@@ -80,6 +80,20 @@ function createBuilderViewModel(
     copyFeedbackMessage: null,
     launchBlocked: false,
     launchBlockReasons: [],
+    scenarioNameInput: "",
+    onScenarioNameInputChange: vi.fn(),
+    savedScenarios: [],
+    selectedScenarioId: null,
+    onSelectScenario: vi.fn(),
+    onSaveScenario: vi.fn(),
+    onLoadScenario: vi.fn(),
+    onSetBaselineSnapshot: vi.fn(),
+    onRevertToBaseline: vi.fn(),
+    canSaveScenario: false,
+    canLoadScenario: false,
+    canSetBaselineSnapshot: true,
+    canRevertToBaseline: false,
+    isScenarioBusy: false,
     emptyMessage: "Select a preset and use it in Builder.",
     ...overrides,
   };
@@ -341,6 +355,52 @@ describe("LeftPanelSkeleton presets and builder tabs", () => {
     expect(html).toContain('data-testid="builder-participant-add-form"');
     expect(html).toContain('data-testid="builder-save-draft-button"');
     expect(html).not.toContain('data-testid="builder-title-input" disabled=""');
+  });
+
+  it("renders scenario controls with stable selectors for save, load, and baseline actions", () => {
+    const html = renderToStaticMarkup(
+      <LeftPanelSkeleton
+        {...createLeftPanelProps({
+          activeTab: "builder",
+          placeholderStateByTab: {
+            library: "ready",
+            builder: "ready",
+            presets: "ready",
+          },
+          builderViewModel: createBuilderViewModel({
+            draft: {
+              title: "Hydrogen combustion",
+              reactionClass: "redox",
+              equation: "2H2 + O2 -> 2H2O",
+              description: "Editable scenario",
+              participants: [],
+            },
+            scenarioNameInput: "Hydrogen what-if",
+            savedScenarios: [
+              {
+                id: "scenario-run-1",
+                name: "Hydrogen what-if",
+                updatedAt: "2026-03-04T09:10:00Z",
+              },
+            ],
+            selectedScenarioId: "scenario-run-1",
+            canSaveScenario: true,
+            canLoadScenario: true,
+            canSetBaselineSnapshot: true,
+            canRevertToBaseline: true,
+          }),
+        })}
+      />,
+    );
+
+    expect(html).toContain('data-testid="builder-scenario-controls"');
+    expect(html).toContain('data-testid="builder-scenario-name-input"');
+    expect(html).toContain('data-testid="builder-scenario-save-button"');
+    expect(html).toContain('data-testid="builder-scenario-list-select"');
+    expect(html).toContain('data-testid="builder-scenario-option-scenario-run-1"');
+    expect(html).toContain('data-testid="builder-scenario-load-button"');
+    expect(html).toContain('data-testid="builder-scenario-set-baseline-button"');
+    expect(html).toContain('data-testid="builder-scenario-revert-baseline-button"');
   });
 
   it("renders participant list controls with stable selectors, units, and conversion hint", () => {

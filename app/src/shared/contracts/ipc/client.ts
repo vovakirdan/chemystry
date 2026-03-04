@@ -6,15 +6,28 @@ import {
   withFeatureFlagDefaults,
 } from "../../config/featureFlags";
 import {
+  BUILDER_PARTICIPANT_ROLES_V1,
   type CreateSubstanceV1Input,
   type CreateSubstanceV1Output,
   type DeleteSubstanceV1Input,
   type DeleteSubstanceV1Output,
   IPC_COMMANDS_V1,
   IPC_CONTRACT_VERSION_V1,
+  type ListScenariosV1Output,
+  type LoadScenarioV1Input,
+  type LoadScenarioV1Output,
+  PRECISION_PROFILES_V1,
   REACTION_CLASSES_V1,
+  type SaveScenarioV1Input,
+  type SaveScenarioV1Output,
+  type ScenarioBuilderSnapshotV1,
+  type ScenarioParticipantSnapshotV1,
+  type ScenarioPayloadV1,
+  type ScenarioRuntimeSettingsV1,
+  type ScenarioSummaryV1,
   SUBSTANCE_PHASES_V1,
   SUBSTANCE_SOURCES_V1,
+  type BuilderParticipantRoleV1,
   type CommandErrorCategoryV1,
   type CommandErrorV1,
   type GetFeatureFlagsV1Output,
@@ -23,6 +36,7 @@ import {
   type HealthV1Output,
   type ListPresetsV1Output,
   type ListSubstancesV1Output,
+  type PrecisionProfileV1,
   type PresetCatalogEntryV1,
   type ReactionClassV1,
   type SubstanceCatalogEntryV1,
@@ -47,6 +61,7 @@ const USER_MESSAGE_BY_CODE_V1: Record<string, string> = {
   FEATURE_DISABLED: "This module is disabled by configuration.",
   INVALID_SUBSTANCE_PAYLOAD: "Substance catalog data is invalid. Please retry.",
   INVALID_PRESET_PAYLOAD: "Preset library data is invalid. Please retry.",
+  INVALID_SCENARIO_PAYLOAD: "Scenario data is invalid. Please retry.",
 };
 
 const USER_MESSAGE_BY_CATEGORY_V1: Record<CommandErrorCategoryV1, string> = {
@@ -69,6 +84,10 @@ export interface ResolvedFeatureFlagsV1 {
 const SUBSTANCE_PHASE_SET_V1: ReadonlySet<SubstancePhaseV1> = new Set(SUBSTANCE_PHASES_V1);
 const SUBSTANCE_SOURCE_SET_V1: ReadonlySet<SubstanceSourceV1> = new Set(SUBSTANCE_SOURCES_V1);
 const REACTION_CLASS_SET_V1: ReadonlySet<ReactionClassV1> = new Set(REACTION_CLASSES_V1);
+const BUILDER_PARTICIPANT_ROLE_SET_V1: ReadonlySet<BuilderParticipantRoleV1> = new Set(
+  BUILDER_PARTICIPANT_ROLES_V1,
+);
+const PRECISION_PROFILE_SET_V1: ReadonlySet<PrecisionProfileV1> = new Set(PRECISION_PROFILES_V1);
 
 function nextClientRequestId(): string {
   clientRequestSequence += 1;
@@ -114,6 +133,19 @@ function createInvalidPresetPayloadError(
     requestId,
     category: "internal",
     code: "INVALID_PRESET_PAYLOAD",
+    message,
+  };
+}
+
+function createInvalidScenarioPayloadError(
+  message: string,
+  requestId: string = nextClientRequestId(),
+): CommandErrorV1 {
+  return {
+    version: IPC_CONTRACT_VERSION_V1,
+    requestId,
+    category: "internal",
+    code: "INVALID_SCENARIO_PAYLOAD",
     message,
   };
 }
@@ -175,6 +207,26 @@ function parseReactionClassV1(value: unknown): ReactionClassV1 | null {
   }
 
   return REACTION_CLASS_SET_V1.has(value as ReactionClassV1) ? (value as ReactionClassV1) : null;
+}
+
+function parseBuilderParticipantRoleV1(value: unknown): BuilderParticipantRoleV1 | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  return BUILDER_PARTICIPANT_ROLE_SET_V1.has(value as BuilderParticipantRoleV1)
+    ? (value as BuilderParticipantRoleV1)
+    : null;
+}
+
+function parsePrecisionProfileV1(value: unknown): PrecisionProfileV1 | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  return PRECISION_PROFILE_SET_V1.has(value as PrecisionProfileV1)
+    ? (value as PrecisionProfileV1)
+    : null;
 }
 
 function parsePresetEntryV1(
@@ -338,6 +390,282 @@ function parseSubstanceEntryV1(
   };
 }
 
+function parseScenarioSummaryV1(
+  candidate: unknown,
+  requestId: string,
+  context: string,
+): ScenarioSummaryV1 {
+  if (!isRecord(candidate)) {
+    throw createInvalidScenarioPayloadError(
+      `Scenario summary ${context} is not an object.`,
+      requestId,
+    );
+  }
+
+  const id = candidate.id;
+  const name = candidate.name;
+  const createdAt = readFirstDefined(candidate, ["createdAt", "created_at"]);
+  const updatedAt = readFirstDefined(candidate, ["updatedAt", "updated_at"]);
+
+  if (typeof id !== "string" || id.trim().length === 0) {
+    throw createInvalidScenarioPayloadError(
+      `Scenario summary ${context} is missing a valid id.`,
+      requestId,
+    );
+  }
+
+  if (typeof name !== "string" || name.trim().length === 0) {
+    throw createInvalidScenarioPayloadError(
+      `Scenario summary "${id}" is missing a valid name.`,
+      requestId,
+    );
+  }
+
+  if (typeof createdAt !== "string" || createdAt.trim().length === 0) {
+    throw createInvalidScenarioPayloadError(
+      `Scenario summary "${id}" is missing a valid createdAt.`,
+      requestId,
+    );
+  }
+
+  const resolvedUpdatedAt = updatedAt === undefined || updatedAt === null ? createdAt : updatedAt;
+  if (typeof resolvedUpdatedAt !== "string" || resolvedUpdatedAt.trim().length === 0) {
+    throw createInvalidScenarioPayloadError(
+      `Scenario summary "${id}" is missing a valid updatedAt.`,
+      requestId,
+    );
+  }
+
+  return {
+    id: id.trim(),
+    name: name.trim(),
+    createdAt: createdAt.trim(),
+    updatedAt: resolvedUpdatedAt.trim(),
+  };
+}
+
+function parseScenarioNullableNumber(
+  value: unknown,
+  fieldLabel: string,
+  requestId: string,
+): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  throw createInvalidScenarioPayloadError(
+    `Scenario runtime setting "${fieldLabel}" must be a finite number or null.`,
+    requestId,
+  );
+}
+
+function parseScenarioParticipantSnapshotV1(
+  candidate: unknown,
+  requestId: string,
+  index: number,
+): ScenarioParticipantSnapshotV1 {
+  if (!isRecord(candidate)) {
+    throw createInvalidScenarioPayloadError(
+      `Scenario participant at index ${index.toString()} is not an object.`,
+      requestId,
+    );
+  }
+
+  const id = candidate.id;
+  const substanceId = readFirstDefined(candidate, ["substanceId", "substance_id"]);
+  const role = parseBuilderParticipantRoleV1(candidate.role);
+  const phase = parseSubstancePhaseV1(candidate.phase);
+  const stoichCoeffInput = readFirstDefined(candidate, ["stoichCoeffInput", "stoich_coeff_input"]);
+  const amountMolInput = readFirstDefined(candidate, ["amountMolInput", "amount_mol_input"]);
+  const massGInput = readFirstDefined(candidate, ["massGInput", "mass_g_input"]);
+  const volumeLInput = readFirstDefined(candidate, ["volumeLInput", "volume_l_input"]);
+
+  if (typeof id !== "string" || id.trim().length === 0) {
+    throw createInvalidScenarioPayloadError(
+      `Scenario participant at index ${index.toString()} is missing a valid id.`,
+      requestId,
+    );
+  }
+
+  if (typeof substanceId !== "string" || substanceId.trim().length === 0) {
+    throw createInvalidScenarioPayloadError(
+      `Scenario participant "${id}" is missing a valid substanceId.`,
+      requestId,
+    );
+  }
+
+  if (role === null) {
+    throw createInvalidScenarioPayloadError(
+      `Scenario participant "${id}" has an unsupported role.`,
+      requestId,
+    );
+  }
+
+  if (phase === null) {
+    throw createInvalidScenarioPayloadError(
+      `Scenario participant "${id}" has an unsupported phase.`,
+      requestId,
+    );
+  }
+
+  if (typeof stoichCoeffInput !== "string") {
+    throw createInvalidScenarioPayloadError(
+      `Scenario participant "${id}" has an invalid stoichCoeffInput value.`,
+      requestId,
+    );
+  }
+
+  return {
+    id: id.trim(),
+    substanceId: substanceId.trim(),
+    role,
+    stoichCoeffInput,
+    phase,
+    amountMolInput: typeof amountMolInput === "string" ? amountMolInput : "",
+    massGInput: typeof massGInput === "string" ? massGInput : "",
+    volumeLInput: typeof volumeLInput === "string" ? volumeLInput : "",
+  };
+}
+
+function parseScenarioBuilderSnapshotV1(
+  candidate: unknown,
+  requestId: string,
+): ScenarioBuilderSnapshotV1 {
+  if (!isRecord(candidate)) {
+    throw createInvalidScenarioPayloadError(
+      "Scenario builder snapshot is not an object.",
+      requestId,
+    );
+  }
+
+  const title = candidate.title;
+  const reactionClass = parseReactionClassV1(
+    readFirstDefined(candidate, ["reactionClass", "reaction_class", "class"]),
+  );
+  const equation = candidate.equation;
+  const description = candidate.description;
+  const participants = candidate.participants;
+
+  if (typeof title !== "string") {
+    throw createInvalidScenarioPayloadError(
+      "Scenario builder snapshot is missing a valid title.",
+      requestId,
+    );
+  }
+
+  if (reactionClass === null) {
+    throw createInvalidScenarioPayloadError(
+      "Scenario builder snapshot has an unsupported reactionClass.",
+      requestId,
+    );
+  }
+
+  if (typeof equation !== "string" || typeof description !== "string") {
+    throw createInvalidScenarioPayloadError(
+      "Scenario builder snapshot has invalid equation or description.",
+      requestId,
+    );
+  }
+
+  if (!Array.isArray(participants)) {
+    throw createInvalidScenarioPayloadError(
+      "Scenario builder snapshot is missing participants list.",
+      requestId,
+    );
+  }
+
+  return {
+    title,
+    reactionClass,
+    equation,
+    description,
+    participants: participants.map((participant, index) =>
+      parseScenarioParticipantSnapshotV1(participant, requestId, index),
+    ),
+  };
+}
+
+function parseScenarioRuntimeSettingsV1(
+  candidate: unknown,
+  requestId: string,
+): ScenarioRuntimeSettingsV1 {
+  if (!isRecord(candidate)) {
+    throw createInvalidScenarioPayloadError(
+      "Scenario runtime settings are not an object.",
+      requestId,
+    );
+  }
+
+  const temperatureC = parseScenarioNullableNumber(
+    readFirstDefined(candidate, ["temperatureC", "temperature_c"]),
+    "temperatureC",
+    requestId,
+  );
+  const pressureAtm = parseScenarioNullableNumber(
+    readFirstDefined(candidate, ["pressureAtm", "pressure_atm"]),
+    "pressureAtm",
+    requestId,
+  );
+  const calculationPasses = parseScenarioNullableNumber(
+    readFirstDefined(candidate, ["calculationPasses", "calculation_passes"]),
+    "calculationPasses",
+    requestId,
+  );
+  const fpsLimit = parseScenarioNullableNumber(
+    readFirstDefined(candidate, ["fpsLimit", "fps_limit"]),
+    "fpsLimit",
+    requestId,
+  );
+  const rawPrecisionProfile = readFirstDefined(candidate, [
+    "precisionProfile",
+    "precision_profile",
+  ]);
+  const precisionProfile = parsePrecisionProfileV1(rawPrecisionProfile);
+  const resolvedPrecisionProfile = precisionProfile ?? "Balanced";
+  if (
+    precisionProfile === null &&
+    rawPrecisionProfile !== undefined &&
+    rawPrecisionProfile !== null
+  ) {
+    throw createInvalidScenarioPayloadError(
+      "Scenario runtime settings have an unsupported precisionProfile.",
+      requestId,
+    );
+  }
+
+  return {
+    temperatureC,
+    pressureAtm,
+    calculationPasses,
+    precisionProfile: resolvedPrecisionProfile,
+    fpsLimit,
+  };
+}
+
+function parseScenarioPayloadV1(candidate: unknown, requestId: string): ScenarioPayloadV1 {
+  if (!isRecord(candidate)) {
+    throw createInvalidScenarioPayloadError("Scenario payload is not an object.", requestId);
+  }
+
+  const builderDraft = parseScenarioBuilderSnapshotV1(
+    readFirstDefined(candidate, ["builderDraft", "builder_draft", "builder"]),
+    requestId,
+  );
+  const runtimeSettings = parseScenarioRuntimeSettingsV1(
+    readFirstDefined(candidate, ["runtimeSettings", "runtime_settings", "runtime"]),
+    requestId,
+  );
+
+  return {
+    builderDraft,
+    runtimeSettings,
+  };
+}
+
 function parseListSubstancesV1Output(payload: unknown): ListSubstancesV1Output {
   if (!isRecord(payload)) {
     throw createInvalidSubstancePayloadError("Substances payload is not an object.");
@@ -438,6 +766,111 @@ function parseDeleteSubstanceV1Output(payload: unknown): DeleteSubstanceV1Output
     version: IPC_CONTRACT_VERSION_V1,
     requestId,
     deleted: payload.deleted,
+  };
+}
+
+function parseListScenariosV1Output(payload: unknown): ListScenariosV1Output {
+  if (!isRecord(payload)) {
+    throw createInvalidScenarioPayloadError("Scenario list payload is not an object.");
+  }
+
+  const requestId =
+    typeof payload.requestId === "string" ? payload.requestId : nextClientRequestId();
+  if (payload.version !== IPC_CONTRACT_VERSION_V1) {
+    throw createInvalidScenarioPayloadError("Scenario list payload version is invalid.", requestId);
+  }
+
+  if (!Array.isArray(payload.scenarios)) {
+    throw createInvalidScenarioPayloadError(
+      "Scenario list payload is missing scenarios list.",
+      requestId,
+    );
+  }
+
+  return {
+    version: IPC_CONTRACT_VERSION_V1,
+    requestId,
+    scenarios: payload.scenarios.map((scenario, index) =>
+      parseScenarioSummaryV1(scenario, requestId, `at index ${index.toString()}`),
+    ),
+  };
+}
+
+function parseSaveScenarioV1Output(payload: unknown): SaveScenarioV1Output {
+  if (!isRecord(payload)) {
+    throw createInvalidScenarioPayloadError("Save scenario payload is not an object.");
+  }
+
+  const requestId =
+    typeof payload.requestId === "string" ? payload.requestId : nextClientRequestId();
+  if (payload.version !== IPC_CONTRACT_VERSION_V1) {
+    throw createInvalidScenarioPayloadError("Save scenario payload version is invalid.", requestId);
+  }
+
+  const scenarioId = readFirstDefined(payload, ["scenarioId", "scenario_id", "id"]);
+  const scenarioName = readFirstDefined(payload, ["scenarioName", "scenario_name", "name"]);
+  const createdAt = readFirstDefined(payload, ["createdAt", "created_at"]);
+  const updatedAt = readFirstDefined(payload, ["updatedAt", "updated_at"]);
+
+  if (typeof payload.updated !== "boolean") {
+    throw createInvalidScenarioPayloadError(
+      "Save scenario payload is missing updated flag.",
+      requestId,
+    );
+  }
+
+  return {
+    version: IPC_CONTRACT_VERSION_V1,
+    requestId,
+    scenario: parseScenarioSummaryV1(
+      {
+        id: scenarioId,
+        name: scenarioName,
+        createdAt,
+        updatedAt: updatedAt ?? createdAt,
+      },
+      requestId,
+      "in save output",
+    ),
+    updated: payload.updated,
+  };
+}
+
+function parseLoadScenarioV1Output(payload: unknown): LoadScenarioV1Output {
+  if (!isRecord(payload)) {
+    throw createInvalidScenarioPayloadError("Load scenario payload is not an object.");
+  }
+
+  const requestId =
+    typeof payload.requestId === "string" ? payload.requestId : nextClientRequestId();
+  if (payload.version !== IPC_CONTRACT_VERSION_V1) {
+    throw createInvalidScenarioPayloadError("Load scenario payload version is invalid.", requestId);
+  }
+
+  return {
+    version: IPC_CONTRACT_VERSION_V1,
+    requestId,
+    scenarioId: (() => {
+      const scenarioId = readFirstDefined(payload, ["scenarioId", "scenario_id", "id"]);
+      if (typeof scenarioId !== "string" || scenarioId.trim().length === 0) {
+        throw createInvalidScenarioPayloadError(
+          "Load scenario payload is missing a valid scenarioId.",
+          requestId,
+        );
+      }
+      return scenarioId.trim();
+    })(),
+    scenarioName: (() => {
+      const scenarioName = readFirstDefined(payload, ["scenarioName", "scenario_name", "name"]);
+      if (typeof scenarioName !== "string" || scenarioName.trim().length === 0) {
+        throw createInvalidScenarioPayloadError(
+          "Load scenario payload is missing a valid scenarioName.",
+          requestId,
+        );
+      }
+      return scenarioName.trim();
+    })(),
+    payload: parseScenarioPayloadV1(payload, requestId),
   };
 }
 
@@ -544,6 +977,17 @@ export async function listPresetsV1(): Promise<ListPresetsV1Output> {
   }
 }
 
+export async function listScenariosV1(): Promise<ListScenariosV1Output> {
+  try {
+    const payload = await invoke<unknown>(IPC_COMMANDS_V1.listScenarios, {
+      input: {},
+    });
+    return parseListScenariosV1Output(payload);
+  } catch (error) {
+    throw normalizeCommandErrorV1(error);
+  }
+}
+
 export async function createSubstanceV1(
   input: CreateSubstanceV1Input,
 ): Promise<CreateSubstanceV1Output> {
@@ -572,6 +1016,45 @@ export async function deleteSubstanceV1(
   try {
     const payload = await invoke<unknown>(IPC_COMMANDS_V1.deleteSubstance, { input });
     return parseDeleteSubstanceV1Output(payload);
+  } catch (error) {
+    throw normalizeCommandErrorV1(error);
+  }
+}
+
+export async function saveScenarioV1(input: SaveScenarioV1Input): Promise<SaveScenarioV1Output> {
+  try {
+    const commandInput: {
+      scenarioId?: string;
+      scenarioName: string;
+      builder: ScenarioBuilderSnapshotV1;
+      runtime: ScenarioRuntimeSettingsV1;
+    } = {
+      scenarioName: input.name,
+      builder: input.payload.builderDraft,
+      runtime: input.payload.runtimeSettings,
+    };
+
+    if (input.scenarioId !== undefined) {
+      commandInput.scenarioId = input.scenarioId;
+    }
+
+    const payload = await invoke<unknown>(IPC_COMMANDS_V1.saveScenario, {
+      input: commandInput,
+    });
+    return parseSaveScenarioV1Output(payload);
+  } catch (error) {
+    throw normalizeCommandErrorV1(error);
+  }
+}
+
+export async function loadScenarioV1(input: LoadScenarioV1Input): Promise<LoadScenarioV1Output> {
+  try {
+    const payload = await invoke<unknown>(IPC_COMMANDS_V1.loadScenario, {
+      input: {
+        scenarioId: input.id,
+      },
+    });
+    return parseLoadScenarioV1Output(payload);
   } catch (error) {
     throw normalizeCommandErrorV1(error);
   }

@@ -10,6 +10,7 @@ export type RightPanelFeatureStatus = {
 type RightPanelSkeletonProps = {
   healthMessage: string;
   featureStatuses: ReadonlyArray<RightPanelFeatureStatus>;
+  runtimeSettings?: RightPanelRuntimeSettings;
   onRuntimeSettingsChange?: (state: RightPanelRuntimeSettings) => void;
 };
 
@@ -72,23 +73,57 @@ function parseNumberInput(value: string): number | null {
   return Number.isFinite(parsedValue) ? parsedValue : null;
 }
 
+function formatRuntimeNumberInput(value: number | null | undefined, fallbackValue: number): string {
+  if (value === undefined) {
+    return String(fallbackValue);
+  }
+
+  if (value === null) {
+    return "";
+  }
+
+  return String(value);
+}
+
 function RightPanelSkeleton({
   healthMessage,
   featureStatuses,
+  runtimeSettings,
   onRuntimeSettingsChange,
 }: RightPanelSkeletonProps) {
   const [activeSection, setActiveSection] = useState<RightPanelSectionId>(
     DEFAULT_RIGHT_PANEL_SECTION,
   );
   const [ambientFogEnabled, setAmbientFogEnabled] = useState(false);
-  const [temperatureCInput, setTemperatureCInput] = useState(String(DEFAULT_TEMPERATURE_C));
-  const [pressureAtmInput, setPressureAtmInput] = useState(String(DEFAULT_PRESSURE_ATM));
-  const [calculationPassesInput, setCalculationPassesInput] = useState(
-    String(DEFAULT_CALCULATION_PASSES),
+  const [temperatureCInput, setTemperatureCInput] = useState(
+    formatRuntimeNumberInput(
+      runtimeSettings === undefined ? DEFAULT_TEMPERATURE_C : runtimeSettings.temperatureC,
+      DEFAULT_TEMPERATURE_C,
+    ),
   );
-  const [precisionProfile, setPrecisionProfile] =
-    useState<PrecisionProfile>(DEFAULT_PRECISION_PROFILE);
-  const [fpsLimitInput, setFpsLimitInput] = useState(String(DEFAULT_FPS_LIMIT));
+  const [pressureAtmInput, setPressureAtmInput] = useState(
+    formatRuntimeNumberInput(
+      runtimeSettings === undefined ? DEFAULT_PRESSURE_ATM : runtimeSettings.pressureAtm,
+      DEFAULT_PRESSURE_ATM,
+    ),
+  );
+  const [calculationPassesInput, setCalculationPassesInput] = useState(
+    formatRuntimeNumberInput(
+      runtimeSettings === undefined
+        ? DEFAULT_CALCULATION_PASSES
+        : runtimeSettings.calculationPasses,
+      DEFAULT_CALCULATION_PASSES,
+    ),
+  );
+  const [precisionProfile, setPrecisionProfile] = useState<PrecisionProfile>(
+    runtimeSettings?.precisionProfile ?? DEFAULT_PRECISION_PROFILE,
+  );
+  const [fpsLimitInput, setFpsLimitInput] = useState(
+    formatRuntimeNumberInput(
+      runtimeSettings === undefined ? DEFAULT_FPS_LIMIT : runtimeSettings.fpsLimit,
+      DEFAULT_FPS_LIMIT,
+    ),
+  );
   const [summaryNote, setSummaryNote] = useState("Initial scenario review pending.");
 
   const parsedTemperatureC = useMemo(

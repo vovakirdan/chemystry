@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, OptionalExtension, Row, Transaction};
+use serde_json::Value;
 
 use super::{open_connection, run_migrations, StorageError};
 
@@ -111,6 +112,15 @@ pub struct UpdateScenarioRun {
     pub precision_profile: String,
     pub fps_limit: i64,
     pub particle_limit: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ScenarioAmountRecord {
+    substance_id: String,
+    amount_mol: Option<f64>,
+    mass_g: Option<f64>,
+    volume_l: Option<f64>,
+    concentration_mol_l: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -667,6 +677,193 @@ impl StorageRepository {
             .map_err(|error| self.sqlite_error("failed to delete scenario run", error))?;
 
         Ok(affected_rows > 0)
+    }
+
+    pub fn upsert_simulation_frame_summary_json(
+        &self,
+        scenario_run_id: &str,
+        t_sim_s: f64,
+        key_metrics_json: &str,
+    ) -> Result<(), StorageError> {
+        if !t_sim_s.is_finite() || t_sim_s < 0.0 {
+            return Err(StorageError::DataInvariant(format!(
+                "simulation_frame_summary.t_sim_s must be finite and >= 0, got {t_sim_s}"
+            )));
+        }
+
+        let normalized_payload = key_metrics_json.trim();
+        if normalized_payload.is_empty() {
+            return Err(StorageError::DataInvariant(
+                "simulation_frame_summary.key_metrics_json must not be empty".to_string(),
+            ));
+        }
+
+        let connection = self.open()?;
+        let frame_id = format!(
+            "simulation-frame-summary-{scenario_run_id}-{}",
+            t_sim_s.to_bits()
+        );
+        connection
+            .execute(
+                "INSERT INTO simulation_frame_summary(
+                    id,
+                    scenario_run_id,
+                    t_sim_s,
+                    key_metrics_json
+                ) VALUES (?1, ?2, ?3, ?4)
+                ON CONFLICT(scenario_run_id, t_sim_s)
+                DO UPDATE SET key_metrics_json = excluded.key_metrics_json",
+                params![frame_id, scenario_run_id, t_sim_s, normalized_payload],
+            )
+            .map_err(|error| {
+                self.sqlite_error("failed to upsert simulation_frame_summary row", error)
+            })?;
+
+        Ok(())
+    }
+
+    pub fn read_simulation_frame_summary_json(
+        &self,
+        scenario_run_id: &str,
+        t_sim_s: f64,
+    ) -> Result<Option<String>, StorageError> {
+        if !t_sim_s.is_finite() || t_sim_s < 0.0 {
+            return Err(StorageError::DataInvariant(format!(
+                "simulation_frame_summary.t_sim_s must be finite and >= 0, got {t_sim_s}"
+            )));
+        }
+
+        let connection = self.open()?;
+        connection
+            .query_row(
+                "SELECT key_metrics_json
+                FROM simulation_frame_summary
+                WHERE scenario_run_id = ?1 AND t_sim_s = ?2
+                LIMIT 1",
+                params![scenario_run_id, t_sim_s],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| {
+                self.sqlite_error("failed to read simulation_frame_summary payload", error)
+            })
+    }
+
+    pub fn replace_scenario_amounts_from_value(
+        &self,
+        scenario_run_id: &str,
+        amounts: &Value,
+    ) -> Result<(), StorageError> {
+        let amount_records = parse_scenario_amount_records(amounts)?;
+
+        let mut deduplicated = BTreeMap::new();
+        for record in amount_records {
+            deduplicated.insert(record.substance_id.clone(), record);
+        }
+
+        let mut connection = self.open()?;
+        let transaction = connection.transaction().map_err(|error| {
+            self.sqlite_error("failed to begin scenario_amount transaction", error)
+        })?;
+
+        transaction
+            .execute(
+                "DELETE FROM scenario_amount WHERE scenario_run_id = ?1",
+                params![scenario_run_id],
+            )
+            .map_err(|error| {
+                self.sqlite_error("failed to clear previous scenario_amount rows", error)
+            })?;
+
+        for (index, record) in deduplicated.values().enumerate() {
+            let substance_exists = transaction
+                .query_row(
+                    "SELECT 1 FROM substance WHERE id = ?1 LIMIT 1",
+                    params![record.substance_id.as_str()],
+                    |row| row.get::<usize, i64>(0),
+                )
+                .optional()
+                .map_err(|error| {
+                    self.sqlite_error("failed to verify scenario_amount substance", error)
+                })?;
+            if substance_exists.is_none() {
+                continue;
+            }
+
+            let amount_id = format!("scenario-amount-{scenario_run_id}-{}", index + 1);
+            transaction
+                .execute(
+                    "INSERT INTO scenario_amount(
+                        id,
+                        scenario_run_id,
+                        substance_id,
+                        amount_mol,
+                        mass_g,
+                        volume_l,
+                        concentration_mol_l
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![
+                        amount_id,
+                        scenario_run_id,
+                        record.substance_id.as_str(),
+                        record.amount_mol,
+                        record.mass_g,
+                        record.volume_l,
+                        record.concentration_mol_l
+                    ],
+                )
+                .map_err(|error| {
+                    self.sqlite_error("failed to insert scenario_amount row", error)
+                })?;
+        }
+
+        transaction.commit().map_err(|error| {
+            self.sqlite_error("failed to commit scenario_amount transaction", error)
+        })
+    }
+
+    pub fn read_scenario_amounts_as_value(
+        &self,
+        scenario_run_id: &str,
+    ) -> Result<Value, StorageError> {
+        let connection = self.open()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT
+                    substance_id,
+                    amount_mol,
+                    mass_g,
+                    volume_l,
+                    concentration_mol_l
+                FROM scenario_amount
+                WHERE scenario_run_id = ?1
+                ORDER BY substance_id ASC",
+            )
+            .map_err(|error| {
+                self.sqlite_error("failed to prepare scenario_amount list query", error)
+            })?;
+
+        let rows = statement
+            .query_map(params![scenario_run_id], |row| {
+                Ok(ScenarioAmountRecord {
+                    substance_id: row.get(0)?,
+                    amount_mol: row.get(1)?,
+                    mass_g: row.get(2)?,
+                    volume_l: row.get(3)?,
+                    concentration_mol_l: row.get(4)?,
+                })
+            })
+            .map_err(|error| self.sqlite_error("failed to query scenario_amount rows", error))?;
+
+        let mut amounts = Vec::new();
+        for row in rows {
+            let record = row.map_err(|error| {
+                self.sqlite_error("failed to decode scenario_amount row", error)
+            })?;
+            amounts.push(scenario_amount_record_to_value(record));
+        }
+
+        Ok(Value::Array(amounts))
     }
 
     pub fn backup_database(&self, backup_path: &Path) -> Result<(), StorageError> {
@@ -1493,6 +1690,135 @@ fn bool_to_sqlite_int(value: bool) -> i64 {
     }
 }
 
+fn parse_scenario_amount_records(
+    amounts: &Value,
+) -> Result<Vec<ScenarioAmountRecord>, StorageError> {
+    let entries = amounts.as_array().ok_or_else(|| {
+        StorageError::DataInvariant(
+            "scenario amount payload must be a JSON array of amount records".to_string(),
+        )
+    })?;
+
+    let mut records = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let entry_object = entry.as_object().ok_or_else(|| {
+            StorageError::DataInvariant(format!(
+                "scenario amount entry at index {index} must be a JSON object"
+            ))
+        })?;
+        let substance_id = parse_required_non_empty_string(entry_object, "substanceId", index)?;
+        let amount_mol = parse_optional_positive_number(entry_object, "amountMol", index)?;
+        let mass_g = parse_optional_positive_number(entry_object, "massG", index)?;
+        let volume_l = parse_optional_positive_number(entry_object, "volumeL", index)?;
+        let concentration_mol_l =
+            parse_optional_positive_number(entry_object, "concentrationMolL", index)?;
+
+        if amount_mol.is_none()
+            && mass_g.is_none()
+            && volume_l.is_none()
+            && concentration_mol_l.is_none()
+        {
+            continue;
+        }
+
+        records.push(ScenarioAmountRecord {
+            substance_id,
+            amount_mol,
+            mass_g,
+            volume_l,
+            concentration_mol_l,
+        });
+    }
+
+    Ok(records)
+}
+
+fn parse_required_non_empty_string(
+    object: &serde_json::Map<String, Value>,
+    field_name: &str,
+    index: usize,
+) -> Result<String, StorageError> {
+    let value = object.get(field_name).ok_or_else(|| {
+        StorageError::DataInvariant(format!(
+            "scenario amount entry at index {index} is missing `{field_name}`"
+        ))
+    })?;
+    let value = value.as_str().ok_or_else(|| {
+        StorageError::DataInvariant(format!(
+            "scenario amount entry at index {index} has non-string `{field_name}`"
+        ))
+    })?;
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(StorageError::DataInvariant(format!(
+            "scenario amount entry at index {index} has empty `{field_name}`"
+        )));
+    }
+
+    Ok(value.to_string())
+}
+
+fn parse_optional_positive_number(
+    object: &serde_json::Map<String, Value>,
+    field_name: &str,
+    index: usize,
+) -> Result<Option<f64>, StorageError> {
+    let Some(raw_value) = object.get(field_name) else {
+        return Ok(None);
+    };
+    if raw_value.is_null() {
+        return Ok(None);
+    }
+
+    let parsed_value = if let Some(number) = raw_value.as_f64() {
+        number
+    } else if let Some(text) = raw_value.as_str() {
+        let normalized = text.trim();
+        if normalized.is_empty() {
+            return Ok(None);
+        }
+        normalized.parse::<f64>().map_err(|_| {
+            StorageError::DataInvariant(format!(
+                "scenario amount entry at index {index} has non-numeric `{field_name}`"
+            ))
+        })?
+    } else {
+        return Err(StorageError::DataInvariant(format!(
+            "scenario amount entry at index {index} has invalid `{field_name}` type"
+        )));
+    };
+
+    if !parsed_value.is_finite() || parsed_value <= 0.0 {
+        return Err(StorageError::DataInvariant(format!(
+            "scenario amount entry at index {index} has non-positive `{field_name}`"
+        )));
+    }
+
+    Ok(Some(parsed_value))
+}
+
+fn scenario_amount_record_to_value(record: ScenarioAmountRecord) -> Value {
+    let mut object = serde_json::Map::new();
+    object.insert(
+        "substanceId".to_string(),
+        Value::String(record.substance_id),
+    );
+    if let Some(value) = record.amount_mol {
+        object.insert("amountMol".to_string(), Value::from(value));
+    }
+    if let Some(value) = record.mass_g {
+        object.insert("massG".to_string(), Value::from(value));
+    }
+    if let Some(value) = record.volume_l {
+        object.insert("volumeL".to_string(), Value::from(value));
+    }
+    if let Some(value) = record.concentration_mol_l {
+        object.insert("concentrationMolL".to_string(), Value::from(value));
+    }
+
+    Value::Object(object)
+}
+
 fn row_to_substance(row: &Row<'_>) -> rusqlite::Result<Substance> {
     Ok(Substance {
         id: row.get(0)?,
@@ -1572,6 +1898,7 @@ fn validate_sqlite_file(path: &Path) -> Result<(), StorageError> {
 #[cfg(test)]
 mod tests {
     use rusqlite::Connection;
+    use serde_json::json;
     use tempfile::TempDir;
 
     use super::*;
@@ -1767,6 +2094,113 @@ mod tests {
                 .count_substance_scenario_usage("substance-usage-missing")
                 .expect("must count missing scenario usage"),
             0
+        );
+    }
+
+    #[test]
+    fn scenario_snapshot_and_amount_helpers_support_roundtrip() {
+        let temp_dir = TempDir::new().expect("must create temp directory");
+        let database_path = temp_dir.path().join("scenario-snapshot.sqlite3");
+
+        run_migrations(&database_path).expect("migrations should succeed");
+        let repository = StorageRepository::new(database_path);
+
+        repository
+            .create_substance(&NewSubstance {
+                id: "snapshot-substance-a".to_string(),
+                name: "Snapshot A".to_string(),
+                formula: "SA".to_string(),
+                smiles: None,
+                molar_mass_g_mol: 12.0,
+                phase_default: "solid".to_string(),
+                source_type: "user_defined".to_string(),
+            })
+            .expect("must create first snapshot substance");
+        repository
+            .create_substance(&NewSubstance {
+                id: "snapshot-substance-b".to_string(),
+                name: "Snapshot B".to_string(),
+                formula: "SB".to_string(),
+                smiles: None,
+                molar_mass_g_mol: 24.0,
+                phase_default: "liquid".to_string(),
+                source_type: "user_defined".to_string(),
+            })
+            .expect("must create second snapshot substance");
+
+        repository
+            .create_scenario_run(&NewScenarioRun {
+                id: "scenario-run-snapshot-1".to_string(),
+                reaction_template_id: None,
+                name: "Snapshot scenario".to_string(),
+                temperature_k: 298.15,
+                pressure_pa: 101_325.0,
+                gas_medium: "air".to_string(),
+                precision_profile: "balanced".to_string(),
+                fps_limit: 60,
+                particle_limit: 10_000,
+            })
+            .expect("must create scenario run for snapshot helper");
+
+        repository
+            .upsert_simulation_frame_summary_json(
+                "scenario-run-snapshot-1",
+                0.0,
+                "{\"version\":1,\"savedAt\":\"1000\",\"builder\":{\"title\":\"v1\"},\"runtime\":{}}",
+            )
+            .expect("must insert initial snapshot payload");
+        repository
+            .upsert_simulation_frame_summary_json(
+                "scenario-run-snapshot-1",
+                0.0,
+                "{\"version\":1,\"savedAt\":\"2000\",\"builder\":{\"title\":\"v2\"},\"runtime\":{}}",
+            )
+            .expect("must update snapshot payload via upsert");
+
+        let stored_snapshot = repository
+            .read_simulation_frame_summary_json("scenario-run-snapshot-1", 0.0)
+            .expect("must read snapshot payload")
+            .expect("snapshot payload should exist");
+        assert_eq!(
+            stored_snapshot,
+            "{\"version\":1,\"savedAt\":\"2000\",\"builder\":{\"title\":\"v2\"},\"runtime\":{}}"
+        );
+
+        repository
+            .replace_scenario_amounts_from_value(
+                "scenario-run-snapshot-1",
+                &json!([
+                    {
+                        "substanceId": "snapshot-substance-a",
+                        "amountMol": 1.5
+                    },
+                    {
+                        "substanceId": "snapshot-substance-b",
+                        "massG": 12.5
+                    },
+                    {
+                        "substanceId": "snapshot-substance-missing",
+                        "amountMol": 9.0
+                    }
+                ]),
+            )
+            .expect("must replace scenario amounts");
+
+        let stored_amounts = repository
+            .read_scenario_amounts_as_value("scenario-run-snapshot-1")
+            .expect("must read scenario amounts");
+        assert_eq!(
+            stored_amounts,
+            json!([
+                {
+                    "substanceId": "snapshot-substance-a",
+                    "amountMol": 1.5
+                },
+                {
+                    "substanceId": "snapshot-substance-b",
+                    "massG": 12.5
+                }
+            ])
         );
     }
 

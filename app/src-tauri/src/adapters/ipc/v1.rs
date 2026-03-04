@@ -1,17 +1,22 @@
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
 use crate::infra::config::feature_flags::FeatureFlags as ConfigFeatureFlags;
 use crate::infra::errors::{CommandError, CommandResult};
 use crate::infra::logging;
 use crate::storage::{
-    NewSubstance, ReactionTemplate, StorageError, StorageRepository, Substance, UpdateSubstance,
+    NewScenarioRun, NewSubstance, ReactionTemplate, StorageError, StorageRepository, Substance,
+    UpdateScenarioRun, UpdateSubstance,
 };
 
 pub const CONTRACT_VERSION_V1: &str = "v1";
 const MAX_NAME_LENGTH: usize = 64;
 const MAX_SUBSTANCE_SEARCH_LENGTH: usize = 128;
 const MAX_SUBSTANCE_ID_LENGTH: usize = 128;
+const MAX_SCENARIO_ID_LENGTH: usize = 128;
+const MAX_SCENARIO_NAME_LENGTH: usize = 160;
 const MAX_SUBSTANCE_NAME_LENGTH: usize = 128;
 const MAX_SUBSTANCE_FORMULA_LENGTH: usize = 64;
 const MAX_SUBSTANCE_SMILES_LENGTH: usize = 512;
@@ -23,6 +28,17 @@ const QUERY_SUBSTANCES_COMMAND_NAME: &str = "query_substances_v1";
 const CREATE_SUBSTANCE_COMMAND_NAME: &str = "create_substance_v1";
 const UPDATE_SUBSTANCE_COMMAND_NAME: &str = "update_substance_v1";
 const DELETE_SUBSTANCE_COMMAND_NAME: &str = "delete_substance_v1";
+const SAVE_SCENARIO_DRAFT_COMMAND_NAME: &str = "save_scenario_draft_v1";
+const LIST_SAVED_SCENARIOS_COMMAND_NAME: &str = "list_saved_scenarios_v1";
+const LOAD_SCENARIO_DRAFT_COMMAND_NAME: &str = "load_scenario_draft_v1";
+const SCENARIO_SNAPSHOT_T_SIM_S: f64 = 0.0;
+const SCENARIO_SNAPSHOT_VERSION: i64 = 1;
+const DEFAULT_SCENARIO_TEMPERATURE_K: f64 = 298.15;
+const DEFAULT_SCENARIO_PRESSURE_PA: f64 = 101_325.0;
+const DEFAULT_SCENARIO_GAS_MEDIUM: &str = "air";
+const DEFAULT_SCENARIO_PRECISION_PROFILE: &str = "balanced";
+const DEFAULT_SCENARIO_FPS_LIMIT: i64 = 60;
+const DEFAULT_SCENARIO_PARTICLE_LIMIT: i64 = 10_000;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -185,6 +201,70 @@ pub struct DeleteSubstanceV1Output {
     pub deleted: bool,
 }
 
+#[derive(Debug, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveScenarioDraftV1Input {
+    #[serde(default)]
+    pub scenario_id: Option<String>,
+    #[serde(default)]
+    pub scenario_name: Option<String>,
+    #[serde(default)]
+    pub builder: Option<Value>,
+    #[serde(default)]
+    pub runtime: Option<Value>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveScenarioDraftV1Output {
+    pub version: &'static str,
+    pub request_id: String,
+    pub scenario_id: String,
+    pub scenario_name: String,
+    pub created_at: String,
+    pub updated: bool,
+}
+
+#[derive(Debug, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ListSavedScenariosV1Input {}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedScenarioListItemV1 {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ListSavedScenariosV1Output {
+    pub version: &'static str,
+    pub request_id: String,
+    pub scenarios: Vec<SavedScenarioListItemV1>,
+}
+
+#[derive(Debug, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadScenarioDraftV1Input {
+    #[serde(default)]
+    pub scenario_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadScenarioDraftV1Output {
+    pub version: &'static str,
+    pub request_id: String,
+    pub scenario_id: String,
+    pub scenario_name: String,
+    pub builder: Value,
+    pub runtime: Value,
+}
+
 pub type CommandErrorV1 = CommandError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,6 +292,40 @@ pub struct ValidatedUpdateSubstanceV1Input {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedDeleteSubstanceV1Input {
     pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidatedSaveScenarioDraftV1Input {
+    pub scenario_id: Option<String>,
+    pub scenario_name: String,
+    pub builder: Value,
+    pub runtime: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedLoadScenarioDraftV1Input {
+    pub scenario_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ScenarioRunMetadata {
+    temperature_k: f64,
+    pressure_pa: f64,
+    gas_medium: String,
+    precision_profile: String,
+    fps_limit: i64,
+    particle_limit: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct ScenarioDraftSnapshotV1 {
+    version: i64,
+    saved_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    updated_at: Option<String>,
+    builder: Value,
+    runtime: Value,
 }
 
 fn validation_error(
@@ -461,6 +575,299 @@ pub fn validate_delete_substance_v1_input(
     })
 }
 
+fn validate_optional_scenario_id(
+    value: Option<&str>,
+    request_id: &str,
+) -> CommandResult<Option<String>> {
+    match value {
+        Some(raw) => Ok(Some(validate_required_text_field(
+            Some(raw),
+            request_id,
+            "scenarioId",
+            "SCENARIO_ID_REQUIRED",
+            "SCENARIO_ID_TOO_LONG",
+            MAX_SCENARIO_ID_LENGTH,
+        )?)),
+        None => Ok(None),
+    }
+}
+
+fn validate_required_scenario_id(value: Option<&str>, request_id: &str) -> CommandResult<String> {
+    validate_required_text_field(
+        value,
+        request_id,
+        "scenarioId",
+        "SCENARIO_ID_REQUIRED",
+        "SCENARIO_ID_TOO_LONG",
+        MAX_SCENARIO_ID_LENGTH,
+    )
+}
+
+fn validate_required_object_payload(
+    value: Option<&Value>,
+    request_id: &str,
+    field_name: &'static str,
+    required_code: &'static str,
+    invalid_code: &'static str,
+) -> CommandResult<Value> {
+    let Some(payload) = value else {
+        return Err(validation_error(
+            request_id,
+            required_code,
+            format!("`{field_name}` is required."),
+        ));
+    };
+    if payload.is_null() {
+        return Err(validation_error(
+            request_id,
+            required_code,
+            format!("`{field_name}` is required."),
+        ));
+    }
+    if !payload.is_object() {
+        return Err(validation_error(
+            request_id,
+            invalid_code,
+            format!("`{field_name}` must be a JSON object."),
+        ));
+    }
+
+    Ok(payload.clone())
+}
+
+pub fn validate_save_scenario_draft_v1_input(
+    input: &SaveScenarioDraftV1Input,
+    request_id: &str,
+) -> CommandResult<ValidatedSaveScenarioDraftV1Input> {
+    let scenario_name = validate_required_text_field(
+        input.scenario_name.as_deref(),
+        request_id,
+        "scenarioName",
+        "SCENARIO_NAME_REQUIRED",
+        "SCENARIO_NAME_TOO_LONG",
+        MAX_SCENARIO_NAME_LENGTH,
+    )?;
+
+    Ok(ValidatedSaveScenarioDraftV1Input {
+        scenario_id: validate_optional_scenario_id(input.scenario_id.as_deref(), request_id)?,
+        scenario_name,
+        builder: validate_required_object_payload(
+            input.builder.as_ref(),
+            request_id,
+            "builder",
+            "SCENARIO_BUILDER_REQUIRED",
+            "SCENARIO_BUILDER_INVALID",
+        )?,
+        runtime: validate_required_object_payload(
+            input.runtime.as_ref(),
+            request_id,
+            "runtime",
+            "SCENARIO_RUNTIME_REQUIRED",
+            "SCENARIO_RUNTIME_INVALID",
+        )?,
+    })
+}
+
+pub fn validate_load_scenario_draft_v1_input(
+    input: &LoadScenarioDraftV1Input,
+    request_id: &str,
+) -> CommandResult<ValidatedLoadScenarioDraftV1Input> {
+    Ok(ValidatedLoadScenarioDraftV1Input {
+        scenario_id: validate_required_scenario_id(input.scenario_id.as_deref(), request_id)?,
+    })
+}
+
+fn now_unix_timestamp_millis() -> String {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_millis().to_string(),
+        Err(_) => "0".to_string(),
+    }
+}
+
+fn next_saved_scenario_id(request_id: &str) -> String {
+    format!("scenario-run-{request_id}")
+}
+
+fn unique_scenario_name(base_name: &str, timestamp_millis: &str) -> String {
+    format!("{base_name} [{timestamp_millis}]")
+}
+
+fn parse_optional_number(value: Option<&Value>) -> Option<f64> {
+    let value = value?;
+    if let Some(number) = value.as_f64() {
+        return Some(number);
+    }
+
+    value
+        .as_str()
+        .and_then(|text| text.trim().parse::<f64>().ok())
+}
+
+fn parse_optional_positive_integer(value: Option<&Value>) -> Option<i64> {
+    let value = value?;
+    if let Some(number) = value.as_i64() {
+        return (number > 0).then_some(number);
+    }
+
+    if let Some(number) = value.as_u64() {
+        if let Ok(number) = i64::try_from(number) {
+            return (number > 0).then_some(number);
+        }
+    }
+
+    if let Some(number) = value.as_f64() {
+        if number.is_finite() && number > 0.0 {
+            let rounded = number.round();
+            if (rounded - number).abs() <= f64::EPSILON && rounded <= i64::MAX as f64 {
+                return Some(rounded as i64);
+            }
+        }
+    }
+
+    value
+        .as_str()
+        .and_then(|text| text.trim().parse::<i64>().ok())
+        .filter(|value| *value > 0)
+}
+
+fn normalize_precision_profile(value: Option<&Value>) -> String {
+    let normalized = value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_lowercase());
+
+    match normalized.as_deref() {
+        Some("balanced") => "balanced".to_string(),
+        Some("high_precision") | Some("high precision") => "high_precision".to_string(),
+        Some("custom") => "custom".to_string(),
+        _ => DEFAULT_SCENARIO_PRECISION_PROFILE.to_string(),
+    }
+}
+
+fn scenario_run_metadata_from_runtime(runtime: &Value) -> ScenarioRunMetadata {
+    let runtime = runtime.as_object();
+    let temperature_c = runtime
+        .and_then(|object| parse_optional_number(object.get("temperatureC")))
+        .filter(|value| value.is_finite() && *value > -273.15)
+        .unwrap_or(DEFAULT_SCENARIO_TEMPERATURE_K - 273.15);
+    let pressure_atm = runtime
+        .and_then(|object| parse_optional_number(object.get("pressureAtm")))
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(DEFAULT_SCENARIO_PRESSURE_PA / 101_325.0);
+    let gas_medium = runtime
+        .and_then(|object| object.get("gasMedium"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| DEFAULT_SCENARIO_GAS_MEDIUM.to_string());
+    let precision_profile = runtime
+        .map(|object| normalize_precision_profile(object.get("precisionProfile")))
+        .unwrap_or_else(|| DEFAULT_SCENARIO_PRECISION_PROFILE.to_string());
+    let fps_limit = runtime
+        .and_then(|object| parse_optional_positive_integer(object.get("fpsLimit")))
+        .unwrap_or(DEFAULT_SCENARIO_FPS_LIMIT);
+    let particle_limit = runtime
+        .and_then(|object| parse_optional_positive_integer(object.get("particleLimit")))
+        .or_else(|| {
+            runtime
+                .and_then(|object| parse_optional_positive_integer(object.get("calculationPasses")))
+        })
+        .unwrap_or(DEFAULT_SCENARIO_PARTICLE_LIMIT);
+
+    ScenarioRunMetadata {
+        temperature_k: temperature_c + 273.15,
+        pressure_pa: pressure_atm * 101_325.0,
+        gas_medium,
+        precision_profile,
+        fps_limit,
+        particle_limit,
+    }
+}
+
+fn parse_optional_positive_builder_number(value: Option<&Value>) -> Option<f64> {
+    let parsed = parse_optional_number(value)?;
+    if parsed.is_finite() && parsed > 0.0 {
+        Some(parsed)
+    } else {
+        None
+    }
+}
+
+fn extract_scenario_amounts_from_builder(builder: &Value) -> Value {
+    let mut amounts = Vec::new();
+    let Some(builder_object) = builder.as_object() else {
+        return Value::Array(amounts);
+    };
+    let Some(participants) = builder_object.get("participants").and_then(Value::as_array) else {
+        return Value::Array(amounts);
+    };
+
+    for participant in participants {
+        let Some(participant) = participant.as_object() else {
+            continue;
+        };
+        let Some(substance_id) = participant
+            .get("substanceId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+
+        let amount_mol = parse_optional_positive_builder_number(
+            participant
+                .get("amountMolInput")
+                .or_else(|| participant.get("amountMol")),
+        );
+        let mass_g = parse_optional_positive_builder_number(
+            participant
+                .get("massGInput")
+                .or_else(|| participant.get("massG")),
+        );
+        let volume_l = parse_optional_positive_builder_number(
+            participant
+                .get("volumeLInput")
+                .or_else(|| participant.get("volumeL")),
+        );
+        let concentration_mol_l = parse_optional_positive_builder_number(
+            participant
+                .get("concentrationMolLInput")
+                .or_else(|| participant.get("concentrationMolL")),
+        );
+
+        if amount_mol.is_none()
+            && mass_g.is_none()
+            && volume_l.is_none()
+            && concentration_mol_l.is_none()
+        {
+            continue;
+        }
+
+        let mut amount_object = Map::new();
+        amount_object.insert("substanceId".to_string(), Value::String(substance_id));
+        if let Some(value) = amount_mol {
+            amount_object.insert("amountMol".to_string(), Value::from(value));
+        }
+        if let Some(value) = mass_g {
+            amount_object.insert("massG".to_string(), Value::from(value));
+        }
+        if let Some(value) = volume_l {
+            amount_object.insert("volumeL".to_string(), Value::from(value));
+        }
+        if let Some(value) = concentration_mol_l {
+            amount_object.insert("concentrationMolL".to_string(), Value::from(value));
+        }
+
+        amounts.push(Value::Object(amount_object));
+    }
+
+    Value::Array(amounts)
+}
+
 fn map_substance_unique_constraint_error(
     request_id: &str,
     error: &StorageError,
@@ -504,6 +911,67 @@ fn map_storage_substance_error(
             internal_message,
         ),
     }
+}
+
+fn map_storage_scenario_error(
+    request_id: &str,
+    error: StorageError,
+    io_code: &'static str,
+    io_message: &'static str,
+    internal_code: &'static str,
+    internal_message: &'static str,
+) -> CommandErrorV1 {
+    match error {
+        StorageError::AppDataPathResolution(_)
+        | StorageError::InvalidDatabasePath(_)
+        | StorageError::InvalidBackupFormat { .. }
+        | StorageError::Io { .. } => {
+            CommandError::io(CONTRACT_VERSION_V1, request_id, io_code, io_message)
+        }
+        StorageError::Sqlite { .. }
+        | StorageError::InvalidMigrationPlan(_)
+        | StorageError::DataInvariant(_)
+        | StorageError::AsyncTaskJoin(_)
+        | StorageError::MigrationFailed { .. } => CommandError::internal(
+            CONTRACT_VERSION_V1,
+            request_id,
+            internal_code,
+            internal_message,
+        ),
+    }
+}
+
+fn map_storage_save_scenario_error(request_id: &str, error: StorageError) -> CommandErrorV1 {
+    map_storage_scenario_error(
+        request_id,
+        error,
+        "SCENARIO_SAVE_IO_FAILED",
+        "Failed to write saved scenario data.",
+        "SCENARIO_SAVE_FAILED",
+        "Failed to save scenario draft.",
+    )
+}
+
+fn map_storage_list_saved_scenarios_error(request_id: &str, error: StorageError) -> CommandErrorV1 {
+    map_storage_scenario_error(
+        request_id,
+        error,
+        "SCENARIO_LIST_IO_FAILED",
+        "Failed to read saved scenarios.",
+        "SCENARIO_LIST_FAILED",
+        "Failed to list saved scenarios.",
+    )
+}
+
+fn map_storage_load_scenario_error(request_id: &str, error: StorageError) -> CommandErrorV1 {
+    map_storage_scenario_error(
+        request_id,
+        error,
+        "SCENARIO_LOAD_IO_FAILED",
+        "Failed to read saved scenario data.",
+        "SCENARIO_LOAD_FAILED",
+        "Failed to load saved scenario draft.",
+    )
 }
 
 fn map_storage_create_error(request_id: &str, error: StorageError) -> CommandErrorV1 {
@@ -842,6 +1310,280 @@ fn delete_substance_v1_with_repository(
     })
 }
 
+fn save_scenario_draft_v1_with_repository(
+    input: &SaveScenarioDraftV1Input,
+    repository: &StorageRepository,
+    request_id: &str,
+) -> CommandResult<SaveScenarioDraftV1Output> {
+    let validated = validate_save_scenario_draft_v1_input(input, request_id)?;
+    let metadata = scenario_run_metadata_from_runtime(&validated.runtime);
+    let saved_at = now_unix_timestamp_millis();
+    let scenario_name = unique_scenario_name(&validated.scenario_name, &saved_at);
+    let updated = validated.scenario_id.is_some();
+
+    let saved_run = if let Some(scenario_id) = validated.scenario_id.as_deref() {
+        repository
+            .get_scenario_run(scenario_id)
+            .map_err(|error| {
+                eprintln!(
+                    "[ipc] storage_failure command={} request_id={} details={}",
+                    SAVE_SCENARIO_DRAFT_COMMAND_NAME, request_id, error
+                );
+                map_storage_save_scenario_error(request_id, error)
+            })?
+            .ok_or_else(|| {
+                validation_error(
+                    request_id,
+                    "SCENARIO_NOT_FOUND",
+                    format!("Scenario `{scenario_id}` was not found."),
+                )
+            })?;
+
+        repository
+            .update_scenario_run(
+                scenario_id,
+                &UpdateScenarioRun {
+                    reaction_template_id: None,
+                    name: scenario_name,
+                    temperature_k: metadata.temperature_k,
+                    pressure_pa: metadata.pressure_pa,
+                    gas_medium: metadata.gas_medium,
+                    precision_profile: metadata.precision_profile,
+                    fps_limit: metadata.fps_limit,
+                    particle_limit: metadata.particle_limit,
+                },
+            )
+            .map_err(|error| {
+                eprintln!(
+                    "[ipc] storage_failure command={} request_id={} details={}",
+                    SAVE_SCENARIO_DRAFT_COMMAND_NAME, request_id, error
+                );
+                map_storage_save_scenario_error(request_id, error)
+            })?
+            .ok_or_else(|| {
+                validation_error(
+                    request_id,
+                    "SCENARIO_NOT_FOUND",
+                    format!("Scenario `{scenario_id}` was not found."),
+                )
+            })?
+    } else {
+        let scenario_id = next_saved_scenario_id(request_id);
+        repository
+            .create_scenario_run(&NewScenarioRun {
+                id: scenario_id,
+                reaction_template_id: None,
+                name: scenario_name,
+                temperature_k: metadata.temperature_k,
+                pressure_pa: metadata.pressure_pa,
+                gas_medium: metadata.gas_medium,
+                precision_profile: metadata.precision_profile,
+                fps_limit: metadata.fps_limit,
+                particle_limit: metadata.particle_limit,
+            })
+            .map_err(|error| {
+                eprintln!(
+                    "[ipc] storage_failure command={} request_id={} details={}",
+                    SAVE_SCENARIO_DRAFT_COMMAND_NAME, request_id, error
+                );
+                map_storage_save_scenario_error(request_id, error)
+            })?
+    };
+
+    let snapshot_payload = ScenarioDraftSnapshotV1 {
+        version: SCENARIO_SNAPSHOT_VERSION,
+        saved_at: saved_at.clone(),
+        updated_at: if updated {
+            Some(saved_at.clone())
+        } else {
+            None
+        },
+        builder: validated.builder.clone(),
+        runtime: validated.runtime.clone(),
+    };
+    let snapshot_json = serde_json::to_string(&snapshot_payload).map_err(|error| {
+        eprintln!(
+            "[ipc] serialization_failure command={} request_id={} details={}",
+            SAVE_SCENARIO_DRAFT_COMMAND_NAME, request_id, error
+        );
+        CommandError::internal(
+            CONTRACT_VERSION_V1,
+            request_id,
+            "SCENARIO_SNAPSHOT_SERIALIZATION_FAILED",
+            "Failed to encode saved scenario payload.",
+        )
+    })?;
+    repository
+        .upsert_simulation_frame_summary_json(
+            &saved_run.id,
+            SCENARIO_SNAPSHOT_T_SIM_S,
+            &snapshot_json,
+        )
+        .map_err(|error| {
+            eprintln!(
+                "[ipc] storage_failure command={} request_id={} details={}",
+                SAVE_SCENARIO_DRAFT_COMMAND_NAME, request_id, error
+            );
+            map_storage_save_scenario_error(request_id, error)
+        })?;
+
+    let scenario_amounts = extract_scenario_amounts_from_builder(&validated.builder);
+    repository
+        .replace_scenario_amounts_from_value(&saved_run.id, &scenario_amounts)
+        .map_err(|error| {
+            eprintln!(
+                "[ipc] storage_failure command={} request_id={} details={}",
+                SAVE_SCENARIO_DRAFT_COMMAND_NAME, request_id, error
+            );
+            map_storage_save_scenario_error(request_id, error)
+        })?;
+
+    Ok(SaveScenarioDraftV1Output {
+        version: CONTRACT_VERSION_V1,
+        request_id: request_id.to_string(),
+        scenario_id: saved_run.id,
+        scenario_name: saved_run.name,
+        created_at: saved_run.created_at,
+        updated,
+    })
+}
+
+fn list_saved_scenarios_v1_with_repository(
+    repository: &StorageRepository,
+    request_id: &str,
+) -> CommandResult<ListSavedScenariosV1Output> {
+    let runs = repository.list_scenario_runs().map_err(|error| {
+        eprintln!(
+            "[ipc] storage_failure command={} request_id={} details={}",
+            LIST_SAVED_SCENARIOS_COMMAND_NAME, request_id, error
+        );
+        map_storage_list_saved_scenarios_error(request_id, error)
+    })?;
+
+    let mut scenarios = Vec::new();
+    for run in runs {
+        let snapshot_json = repository
+            .read_simulation_frame_summary_json(&run.id, SCENARIO_SNAPSHOT_T_SIM_S)
+            .map_err(|error| {
+                eprintln!(
+                    "[ipc] storage_failure command={} request_id={} details={}",
+                    LIST_SAVED_SCENARIOS_COMMAND_NAME, request_id, error
+                );
+                map_storage_list_saved_scenarios_error(request_id, error)
+            })?;
+        let Some(snapshot_json) = snapshot_json else {
+            continue;
+        };
+
+        let snapshot: ScenarioDraftSnapshotV1 =
+            serde_json::from_str(&snapshot_json).map_err(|error| {
+                eprintln!(
+                    "[ipc] serialization_failure command={} request_id={} details={}",
+                    LIST_SAVED_SCENARIOS_COMMAND_NAME, request_id, error
+                );
+                CommandError::internal(
+                    CONTRACT_VERSION_V1,
+                    request_id,
+                    "SCENARIO_LIST_CORRUPTED_SNAPSHOT",
+                    "Failed to decode saved scenario snapshot.",
+                )
+            })?;
+        if snapshot.version != SCENARIO_SNAPSHOT_VERSION {
+            return Err(CommandError::internal(
+                CONTRACT_VERSION_V1,
+                request_id,
+                "SCENARIO_LIST_UNSUPPORTED_SNAPSHOT_VERSION",
+                "Saved scenario snapshot version is not supported.",
+            ));
+        }
+
+        scenarios.push(SavedScenarioListItemV1 {
+            id: run.id,
+            name: run.name,
+            created_at: run.created_at,
+            updated_at: snapshot.updated_at,
+        });
+    }
+
+    Ok(ListSavedScenariosV1Output {
+        version: CONTRACT_VERSION_V1,
+        request_id: request_id.to_string(),
+        scenarios,
+    })
+}
+
+fn load_scenario_draft_v1_with_repository(
+    input: &LoadScenarioDraftV1Input,
+    repository: &StorageRepository,
+    request_id: &str,
+) -> CommandResult<LoadScenarioDraftV1Output> {
+    let validated = validate_load_scenario_draft_v1_input(input, request_id)?;
+    let run = repository
+        .get_scenario_run(&validated.scenario_id)
+        .map_err(|error| {
+            eprintln!(
+                "[ipc] storage_failure command={} request_id={} details={}",
+                LOAD_SCENARIO_DRAFT_COMMAND_NAME, request_id, error
+            );
+            map_storage_load_scenario_error(request_id, error)
+        })?
+        .ok_or_else(|| {
+            validation_error(
+                request_id,
+                "SCENARIO_NOT_FOUND",
+                format!("Scenario `{}` was not found.", validated.scenario_id),
+            )
+        })?;
+
+    let snapshot_json = repository
+        .read_simulation_frame_summary_json(&run.id, SCENARIO_SNAPSHOT_T_SIM_S)
+        .map_err(|error| {
+            eprintln!(
+                "[ipc] storage_failure command={} request_id={} details={}",
+                LOAD_SCENARIO_DRAFT_COMMAND_NAME, request_id, error
+            );
+            map_storage_load_scenario_error(request_id, error)
+        })?
+        .ok_or_else(|| {
+            validation_error(
+                request_id,
+                "SCENARIO_DRAFT_NOT_FOUND",
+                format!("Saved draft for scenario `{}` was not found.", run.id),
+            )
+        })?;
+
+    let snapshot: ScenarioDraftSnapshotV1 =
+        serde_json::from_str(&snapshot_json).map_err(|error| {
+            eprintln!(
+                "[ipc] serialization_failure command={} request_id={} details={}",
+                LOAD_SCENARIO_DRAFT_COMMAND_NAME, request_id, error
+            );
+            CommandError::internal(
+                CONTRACT_VERSION_V1,
+                request_id,
+                "SCENARIO_LOAD_CORRUPTED_SNAPSHOT",
+                "Failed to decode saved scenario payload.",
+            )
+        })?;
+    if snapshot.version != SCENARIO_SNAPSHOT_VERSION {
+        return Err(CommandError::internal(
+            CONTRACT_VERSION_V1,
+            request_id,
+            "SCENARIO_LOAD_UNSUPPORTED_SNAPSHOT_VERSION",
+            "Saved scenario snapshot version is not supported.",
+        ));
+    }
+
+    Ok(LoadScenarioDraftV1Output {
+        version: CONTRACT_VERSION_V1,
+        request_id: request_id.to_string(),
+        scenario_id: run.id,
+        scenario_name: run.name,
+        builder: snapshot.builder,
+        runtime: snapshot.runtime,
+    })
+}
+
 #[tauri::command]
 pub fn greet_v1(input: GreetV1Input) -> CommandResult<GreetV1Output> {
     let request_id = logging::next_request_id();
@@ -982,6 +1724,68 @@ pub fn delete_substance_v1(
 }
 
 #[tauri::command]
+pub fn save_scenario_draft_v1(
+    input: SaveScenarioDraftV1Input,
+    repository: State<'_, StorageRepository>,
+) -> CommandResult<SaveScenarioDraftV1Output> {
+    let request_id = logging::next_request_id();
+    logging::log_command_start(SAVE_SCENARIO_DRAFT_COMMAND_NAME, &request_id);
+
+    let result = save_scenario_draft_v1_with_repository(&input, &repository, &request_id);
+    match result {
+        Ok(output) => {
+            logging::log_command_success(SAVE_SCENARIO_DRAFT_COMMAND_NAME, &request_id);
+            Ok(output)
+        }
+        Err(error) => {
+            logging::log_command_failure(SAVE_SCENARIO_DRAFT_COMMAND_NAME, &error);
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn list_saved_scenarios_v1(
+    repository: State<'_, StorageRepository>,
+) -> CommandResult<ListSavedScenariosV1Output> {
+    let request_id = logging::next_request_id();
+    logging::log_command_start(LIST_SAVED_SCENARIOS_COMMAND_NAME, &request_id);
+
+    let result = list_saved_scenarios_v1_with_repository(&repository, &request_id);
+    match result {
+        Ok(output) => {
+            logging::log_command_success(LIST_SAVED_SCENARIOS_COMMAND_NAME, &request_id);
+            Ok(output)
+        }
+        Err(error) => {
+            logging::log_command_failure(LIST_SAVED_SCENARIOS_COMMAND_NAME, &error);
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn load_scenario_draft_v1(
+    input: LoadScenarioDraftV1Input,
+    repository: State<'_, StorageRepository>,
+) -> CommandResult<LoadScenarioDraftV1Output> {
+    let request_id = logging::next_request_id();
+    logging::log_command_start(LOAD_SCENARIO_DRAFT_COMMAND_NAME, &request_id);
+
+    let result = load_scenario_draft_v1_with_repository(&input, &repository, &request_id);
+    match result {
+        Ok(output) => {
+            logging::log_command_success(LOAD_SCENARIO_DRAFT_COMMAND_NAME, &request_id);
+            Ok(output)
+        }
+        Err(error) => {
+            logging::log_command_failure(LOAD_SCENARIO_DRAFT_COMMAND_NAME, &error);
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
 pub fn query_substances_v1(
     input: QuerySubstancesV1Input,
     repository: State<'_, StorageRepository>,
@@ -1029,7 +1833,7 @@ pub fn query_substances_v1(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::{collections::BTreeSet, thread::sleep, time::Duration};
 
     use rusqlite::{params, Connection};
     use serde_json::json;
@@ -1046,6 +1850,60 @@ mod tests {
         let database_path = temp_dir.path().join(file_name);
         run_migrations(&database_path).expect("migrations should succeed");
         (temp_dir, StorageRepository::new(database_path))
+    }
+
+    fn create_builder_test_substance(repository: &StorageRepository, id: &str) {
+        repository
+            .create_substance(&NewSubstance {
+                id: id.to_string(),
+                name: format!("Draft {id}"),
+                formula: format!("F-{id}"),
+                smiles: None,
+                molar_mass_g_mol: 10.0,
+                phase_default: "solid".to_string(),
+                source_type: "user_defined".to_string(),
+            })
+            .expect("must create builder draft test substance");
+    }
+
+    fn sample_builder_payload(substance_id: &str) -> Value {
+        json!({
+            "title": "Builder scenario",
+            "reactionClass": "inorganic",
+            "equation": "A + B -> AB",
+            "description": "Draft payload",
+            "participants": [
+                {
+                    "id": "participant-1",
+                    "substanceId": substance_id,
+                    "role": "reactant",
+                    "stoichCoeffInput": "1",
+                    "phase": "solid",
+                    "amountMolInput": "1.5",
+                    "massGInput": "",
+                    "volumeLInput": ""
+                }
+            ]
+        })
+    }
+
+    fn sample_runtime_payload() -> Value {
+        json!({
+            "temperatureC": 20.0,
+            "pressureAtm": 1.0,
+            "calculationPasses": 500,
+            "precisionProfile": "Balanced",
+            "fpsLimit": 90
+        })
+    }
+
+    fn sample_save_input(substance_id: &str) -> SaveScenarioDraftV1Input {
+        SaveScenarioDraftV1Input {
+            scenario_id: None,
+            scenario_name: Some("Saved Draft".to_string()),
+            builder: Some(sample_builder_payload(substance_id)),
+            runtime: Some(sample_runtime_payload()),
+        }
     }
 
     #[test]
@@ -1754,5 +2612,168 @@ mod tests {
                 source: "user".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn save_list_and_load_scenario_draft_roundtrip_succeeds() {
+        let (_temp_dir, repository) = setup_repository("scenario-draft-roundtrip.sqlite3");
+        create_builder_test_substance(&repository, "scenario-draft-substance-1");
+
+        let save_output = save_scenario_draft_v1_with_repository(
+            &sample_save_input("scenario-draft-substance-1"),
+            &repository,
+            "req-scenario-save-roundtrip",
+        )
+        .expect("save scenario draft should succeed");
+        assert!(!save_output.updated);
+        assert_eq!(save_output.version, CONTRACT_VERSION_V1);
+        assert!(
+            save_output.scenario_name.starts_with("Saved Draft ["),
+            "saved scenario name should include timestamp suffix"
+        );
+
+        let list_output = list_saved_scenarios_v1_with_repository(&repository, "req-scenario-list")
+            .expect("list saved scenarios should succeed");
+        assert_eq!(list_output.version, CONTRACT_VERSION_V1);
+        assert_eq!(list_output.scenarios.len(), 1);
+        assert_eq!(list_output.scenarios[0].id, save_output.scenario_id);
+        assert_eq!(list_output.scenarios[0].name, save_output.scenario_name);
+        assert_eq!(list_output.scenarios[0].updated_at, None);
+
+        let load_output = load_scenario_draft_v1_with_repository(
+            &LoadScenarioDraftV1Input {
+                scenario_id: Some(save_output.scenario_id.clone()),
+            },
+            &repository,
+            "req-scenario-load",
+        )
+        .expect("load scenario draft should succeed");
+        assert_eq!(load_output.version, CONTRACT_VERSION_V1);
+        assert_eq!(
+            load_output.builder,
+            sample_builder_payload("scenario-draft-substance-1")
+        );
+        assert_eq!(load_output.runtime, sample_runtime_payload());
+
+        let saved_amounts = repository
+            .read_scenario_amounts_as_value(&save_output.scenario_id)
+            .expect("must read persisted scenario amounts");
+        assert_eq!(
+            saved_amounts,
+            json!([
+                {
+                    "substanceId": "scenario-draft-substance-1",
+                    "amountMol": 1.5
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn save_scenario_draft_updates_existing_scenario_when_scenario_id_is_provided() {
+        let (_temp_dir, repository) = setup_repository("scenario-draft-update.sqlite3");
+        create_builder_test_substance(&repository, "scenario-draft-substance-update");
+
+        let initial_save = save_scenario_draft_v1_with_repository(
+            &sample_save_input("scenario-draft-substance-update"),
+            &repository,
+            "req-scenario-update-initial",
+        )
+        .expect("initial scenario save should succeed");
+        sleep(Duration::from_millis(1));
+
+        let update_input = SaveScenarioDraftV1Input {
+            scenario_id: Some(initial_save.scenario_id.clone()),
+            scenario_name: Some("Saved Draft".to_string()),
+            builder: Some(json!({
+                "title": "Builder scenario updated",
+                "reactionClass": "redox",
+                "equation": "A + B -> AB",
+                "description": "Updated draft payload",
+                "participants": [
+                    {
+                        "id": "participant-1",
+                        "substanceId": "scenario-draft-substance-update",
+                        "role": "reactant",
+                        "stoichCoeffInput": "1",
+                        "phase": "solid",
+                        "amountMolInput": "2.25",
+                        "massGInput": "",
+                        "volumeLInput": ""
+                    }
+                ]
+            })),
+            runtime: Some(json!({
+                "temperatureC": 25.0,
+                "pressureAtm": 1.0,
+                "calculationPasses": 700,
+                "precisionProfile": "High Precision",
+                "fpsLimit": 120
+            })),
+        };
+        let expected_builder = update_input
+            .builder
+            .clone()
+            .expect("builder payload should be present");
+        let expected_runtime = update_input
+            .runtime
+            .clone()
+            .expect("runtime payload should be present");
+        let updated_save = save_scenario_draft_v1_with_repository(
+            &update_input,
+            &repository,
+            "req-scenario-update-second",
+        )
+        .expect("updated scenario save should succeed");
+        assert!(updated_save.updated);
+        assert_eq!(updated_save.scenario_id, initial_save.scenario_id);
+        assert_ne!(updated_save.scenario_name, initial_save.scenario_name);
+
+        let list_output =
+            list_saved_scenarios_v1_with_repository(&repository, "req-scenario-update-list")
+                .expect("list saved scenarios should succeed");
+        assert_eq!(list_output.scenarios.len(), 1);
+        assert_eq!(list_output.scenarios[0].id, updated_save.scenario_id);
+        assert!(list_output.scenarios[0].updated_at.is_some());
+
+        let load_output = load_scenario_draft_v1_with_repository(
+            &LoadScenarioDraftV1Input {
+                scenario_id: Some(updated_save.scenario_id.clone()),
+            },
+            &repository,
+            "req-scenario-update-load",
+        )
+        .expect("load updated scenario should succeed");
+        assert_eq!(load_output.builder, expected_builder);
+        assert_eq!(load_output.runtime, expected_runtime);
+    }
+
+    #[test]
+    fn validate_save_scenario_draft_v1_rejects_empty_name_and_invalid_payload() {
+        let empty_name_error = validate_save_scenario_draft_v1_input(
+            &SaveScenarioDraftV1Input {
+                scenario_id: None,
+                scenario_name: Some("  ".to_string()),
+                builder: Some(json!({"title": "draft"})),
+                runtime: Some(json!({"temperatureC": 20})),
+            },
+            "req-scenario-validate-empty",
+        )
+        .expect_err("empty scenario name must be rejected");
+        assert_eq!(empty_name_error.category, ErrorCategory::Validation);
+        assert_eq!(empty_name_error.code, "SCENARIO_NAME_REQUIRED");
+
+        let invalid_payload_error = validate_save_scenario_draft_v1_input(
+            &SaveScenarioDraftV1Input {
+                scenario_id: None,
+                scenario_name: Some("Valid draft".to_string()),
+                builder: Some(json!("invalid-builder-shape")),
+                runtime: Some(json!({"temperatureC": 20})),
+            },
+            "req-scenario-validate-payload",
+        )
+        .expect_err("non-object builder payload must be rejected");
+        assert_eq!(invalid_payload_error.category, ErrorCategory::Validation);
+        assert_eq!(invalid_payload_error.code, "SCENARIO_BUILDER_INVALID");
     }
 }
