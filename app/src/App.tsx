@@ -1,15 +1,57 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
+import { greetV1, healthV1 } from "./shared/contracts/ipc/client";
 import "./App.css";
 
 function App() {
   const [greetMsg, setGreetMsg] = useState("");
+  const [healthMsg, setHealthMsg] = useState("Checking backend health...");
   const [name, setName] = useState("");
 
+  useEffect(() => {
+    let disposed = false;
+
+    healthV1()
+      .then((result) => {
+        if (!disposed) {
+          setHealthMsg(`Backend ${result.status} (${result.version})`);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!disposed) {
+          if (
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            "message" in error
+          ) {
+            const commandError = error as { code: string; message: string };
+            setHealthMsg(`Backend error [${commandError.code}] ${commandError.message}`);
+            return;
+          }
+
+          setHealthMsg(`Backend error ${String(error)}`);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
   async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
+    try {
+      const result = await greetV1({ name });
+      setGreetMsg(result.message);
+    } catch (error: unknown) {
+      if (typeof error === "object" && error !== null && "code" in error && "message" in error) {
+        const commandError = error as { code: string; message: string };
+        setGreetMsg(`[${commandError.code}] ${commandError.message}`);
+        return;
+      }
+
+      setGreetMsg(`Unexpected error: ${String(error)}`);
+    }
   }
 
   return (
@@ -28,6 +70,7 @@ function App() {
         </a>
       </div>
       <p>Click on the Tauri, Vite, and React logos to learn more.</p>
+      <p>{healthMsg}</p>
 
       <form
         className="row"
