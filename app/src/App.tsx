@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import AppShell from "./app/layout/AppShell";
 import reactLogo from "./assets/react.svg";
+import LeftPanelSkeleton from "./features/left-panel/LeftPanelSkeleton";
+import {
+  DEFAULT_LEFT_PANEL_TAB,
+  isLeftPanelTabId,
+  type LeftPanelPlaceholderState,
+  type LeftPanelTabId,
+} from "./features/left-panel/model";
 import type { FeatureFlagKey, FeatureFlags } from "./shared/config/featureFlags";
 import { DEFAULT_FEATURE_FLAGS } from "./shared/config/featureFlags";
 import {
@@ -32,17 +39,63 @@ const FEATURE_KEYS: ReadonlyArray<FeatureFlagKey> = [
   "advancedPrecision",
 ];
 
+const LEFT_PANEL_ACTIVE_TAB_STORAGE_KEY = "chemystery.leftPanel.activeTab.v1";
+
+const LEFT_PANEL_PLACEHOLDER_STATE_BY_TAB: Readonly<
+  Record<LeftPanelTabId, LeftPanelPlaceholderState>
+> = {
+  library: "loading",
+  builder: "empty",
+  presets: "error",
+};
+
+function readStoredLeftPanelTab(): LeftPanelTabId {
+  if (typeof window === "undefined") {
+    return DEFAULT_LEFT_PANEL_TAB;
+  }
+
+  try {
+    const storedTab = window.localStorage.getItem(LEFT_PANEL_ACTIVE_TAB_STORAGE_KEY);
+
+    if (storedTab && isLeftPanelTabId(storedTab)) {
+      return storedTab;
+    }
+  } catch {
+    // Ignore localStorage failures and use the default tab.
+  }
+
+  return DEFAULT_LEFT_PANEL_TAB;
+}
+
+function persistLeftPanelTab(tab: LeftPanelTabId): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(LEFT_PANEL_ACTIVE_TAB_STORAGE_KEY, tab);
+  } catch {
+    // Ignore localStorage failures to keep the shell interactive.
+  }
+}
+
 function formatCommandError(error: CommandErrorV1): string {
   return `${toUserFacingMessageV1(error)} [${error.code}] (ref: ${error.requestId})`;
 }
 
 function App() {
+  const [activeLeftPanelTab, setActiveLeftPanelTab] =
+    useState<LeftPanelTabId>(readStoredLeftPanelTab);
   const [greetMsg, setGreetMsg] = useState("");
   const [healthMsg, setHealthMsg] = useState("Checking backend health...");
   const [name, setName] = useState("");
   const [featureFlags, setFeatureFlags] = useState<Readonly<FeatureFlags>>(DEFAULT_FEATURE_FLAGS);
   const [featureFlagsMsg, setFeatureFlagsMsg] = useState("Loading feature flags...");
   const [featurePathMsg, setFeaturePathMsg] = useState("");
+
+  useEffect(() => {
+    persistLeftPanelTab(activeLeftPanelTab);
+  }, [activeLeftPanelTab]);
 
   useEffect(() => {
     let disposed = false;
@@ -131,25 +184,11 @@ function App() {
     <div className="app-root">
       <AppShell
         leftPanel={
-          <>
-            <h2 className="panel-title">Navigation</h2>
-            <p className="panel-description">
-              Use Tab to move through controls. Use Alt+1, Alt+2, and Alt+3 to jump between the main
-              panels.
-            </p>
-
-            <nav className="panel-nav" aria-label="Center panel sections">
-              <a className="panel-nav-link" href="#backend-health">
-                Backend health
-              </a>
-              <a className="panel-nav-link" href="#feature-flags">
-                Feature paths
-              </a>
-              <a className="panel-nav-link" href="#greet-form">
-                Greeting demo
-              </a>
-            </nav>
-          </>
+          <LeftPanelSkeleton
+            activeTab={activeLeftPanelTab}
+            onTabChange={setActiveLeftPanelTab}
+            placeholderStateByTab={LEFT_PANEL_PLACEHOLDER_STATE_BY_TAB}
+          />
         }
         centerPanel={
           <>

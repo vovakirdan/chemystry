@@ -102,25 +102,6 @@ a:focus-visible {
   font-size: 0.92rem;
 }
 
-.panel-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.panel-nav-link {
-  border-radius: 8px;
-  background: #e8f0f8;
-  color: #173f69;
-  font-weight: 500;
-  padding: 0.45rem 0.6rem;
-}
-
-.panel-nav-link:hover {
-  background: #dce9f6;
-  text-decoration: none;
-}
-
 .center-header h1 {
   font-size: 1.6rem;
   line-height: 1.2;
@@ -213,6 +194,103 @@ button:hover {
   border-color: #153f71;
 }
 
+.left-panel-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.left-panel-header,
+.left-panel-content-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.left-panel-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+button.left-panel-tab {
+  border: 1px solid #b4c1d0;
+  background: #edf3f9;
+  color: #1f3f63;
+  padding: 0.45rem 0.55rem;
+  font-weight: 600;
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease;
+}
+
+button.left-panel-tab:hover {
+  border-color: #8ea7c4;
+  background: #dfe9f4;
+}
+
+button.left-panel-tab[aria-selected="true"] {
+  border-color: #1b4d87;
+  background: #1b4d87;
+  color: #ffffff;
+}
+
+.left-panel-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  border: 1px solid #d4dee9;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 0.75rem;
+}
+
+.left-panel-data-boundary {
+  min-height: 7.2rem;
+  border: 1px dashed #b2c2d3;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 0.65rem;
+}
+
+.left-panel-placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.left-panel-placeholder-title {
+  margin: 0;
+  font-size: 0.98rem;
+  color: #2a425d;
+}
+
+.left-panel-placeholder-text {
+  margin: 0;
+  color: #4b6077;
+  font-size: 0.9rem;
+}
+
+.left-panel-placeholder--loading .left-panel-placeholder-title {
+  color: #17527d;
+}
+
+.left-panel-placeholder--empty .left-panel-placeholder-title {
+  color: #3d5570;
+}
+
+.left-panel-placeholder--error {
+  border: 1px solid #e3bcbc;
+  border-radius: 8px;
+  background: #fff4f4;
+  padding: 0.55rem;
+}
+
+.left-panel-placeholder--error .left-panel-placeholder-title {
+  color: #8b2f2f;
+}
+
 .kbd-list {
   list-style: none;
   margin: 0;
@@ -264,5 +342,9 @@ kbd {
 
   input {
     min-width: 9rem;
+  }
+
+  .left-panel-tabs {
+    grid-template-columns: 1fr;
   }
 }
