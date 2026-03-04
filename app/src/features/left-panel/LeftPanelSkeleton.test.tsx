@@ -251,6 +251,7 @@ describe("CenterPanelSkeleton launch blocking", () => {
   it("disables Play and shows blocked reason when play is blocked", () => {
     const html = renderToStaticMarkup(
       <CenterPanelSkeleton
+        controlState={{ isPlaying: false, timelinePosition: 25 }}
         playBlocked
         playBlockedReason={'Mass (g) for participant "participant-1" cannot be negative.'}
       />,
@@ -267,7 +268,12 @@ describe("CenterPanelSkeleton launch blocking", () => {
   });
 
   it("keeps Play available when blocking conditions are removed", () => {
-    const html = renderToStaticMarkup(<CenterPanelSkeleton playBlocked={false} />);
+    const html = renderToStaticMarkup(
+      <CenterPanelSkeleton
+        controlState={{ isPlaying: false, timelinePosition: 25 }}
+        playBlocked={false}
+      />,
+    );
 
     expect(html).toContain('data-testid="center-control-play"');
     expect(html).not.toContain('data-testid="center-control-play" disabled=""');

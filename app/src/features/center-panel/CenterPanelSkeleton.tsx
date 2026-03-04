@@ -1,8 +1,13 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 
 type CenterPanelSkeletonProps = {
   children?: ReactNode;
+  controlState: CenterPanelControlState;
   onSimulationControlsChange?: (state: CenterPanelControlState) => void;
+  onSimulationStart?: () => void;
+  onSimulationPause?: () => void;
+  onSimulationReset?: () => void;
+  onSimulationTimelinePositionChange?: (timelinePosition: number) => void;
   playBlocked?: boolean;
   playBlockedReason?: string | null;
 };
@@ -19,28 +24,67 @@ export type CenterPanelControlState = {
 
 function CenterPanelSkeleton({
   children,
+  controlState,
   onSimulationControlsChange,
+  onSimulationStart,
+  onSimulationPause,
+  onSimulationReset,
+  onSimulationTimelinePositionChange,
   playBlocked = false,
   playBlockedReason = null,
 }: CenterPanelSkeletonProps) {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [timelinePosition, setTimelinePosition] = useState(CENTER_TIMELINE_INITIAL);
-  const effectiveIsPlaying = isPlaying && !playBlocked;
-
-  useEffect(() => {
-    onSimulationControlsChange?.({
-      isPlaying: effectiveIsPlaying,
-      timelinePosition,
-    });
-  }, [effectiveIsPlaying, onSimulationControlsChange, timelinePosition]);
-
-  const playDisabled = effectiveIsPlaying || playBlocked;
+  const resolvedControlState = controlState;
+  const playDisabled = resolvedControlState.isPlaying || playBlocked;
   const playUnavailableHint =
     playBlockedReason ?? "Play is blocked until pre-run checks are fixed.";
 
-  function resetControls(): void {
-    setIsPlaying(false);
-    setTimelinePosition(TIMELINE_MIN);
+  function handlePlayClick(): void {
+    if (playBlocked || resolvedControlState.isPlaying) {
+      return;
+    }
+
+    const nextState: CenterPanelControlState = {
+      ...resolvedControlState,
+      isPlaying: true,
+    };
+    onSimulationStart?.();
+    onSimulationControlsChange?.(nextState);
+  }
+
+  function handlePauseClick(): void {
+    if (!resolvedControlState.isPlaying) {
+      return;
+    }
+
+    const nextState: CenterPanelControlState = {
+      ...resolvedControlState,
+      isPlaying: false,
+    };
+    onSimulationPause?.();
+    onSimulationControlsChange?.(nextState);
+  }
+
+  function handleResetClick(): void {
+    const nextState: CenterPanelControlState = {
+      isPlaying: false,
+      timelinePosition: TIMELINE_MIN,
+    };
+
+    onSimulationReset?.();
+    onSimulationControlsChange?.(nextState);
+  }
+
+  function handleTimelineChange(nextTimelinePosition: number): void {
+    if (nextTimelinePosition === resolvedControlState.timelinePosition) {
+      return;
+    }
+
+    const nextState: CenterPanelControlState = {
+      ...resolvedControlState,
+      timelinePosition: nextTimelinePosition,
+    };
+    onSimulationTimelinePositionChange?.(nextTimelinePosition);
+    onSimulationControlsChange?.(nextState);
   }
 
   return (
@@ -85,13 +129,7 @@ function CenterPanelSkeleton({
               type="button"
               aria-label="Play timeline"
               data-testid="center-control-play"
-              onClick={() => {
-                if (playBlocked) {
-                  return;
-                }
-
-                setIsPlaying(true);
-              }}
+              onClick={handlePlayClick}
               disabled={playDisabled}
               title={playBlocked ? playUnavailableHint : undefined}
             >
@@ -101,8 +139,8 @@ function CenterPanelSkeleton({
               type="button"
               aria-label="Pause timeline"
               data-testid="center-control-pause"
-              onClick={() => setIsPlaying(false)}
-              disabled={!isPlaying}
+              onClick={handlePauseClick}
+              disabled={!resolvedControlState.isPlaying}
             >
               Pause
             </button>
@@ -110,7 +148,7 @@ function CenterPanelSkeleton({
               type="button"
               aria-label="Reset timeline"
               data-testid="center-control-reset"
-              onClick={resetControls}
+              onClick={handleResetClick}
             >
               Reset
             </button>
@@ -124,23 +162,24 @@ function CenterPanelSkeleton({
               min={TIMELINE_MIN}
               max={TIMELINE_MAX}
               step={TIMELINE_STEP}
-              value={timelinePosition}
+              value={resolvedControlState.timelinePosition}
               aria-label="Simulation timeline position"
               data-testid="center-control-timeline"
-              onChange={(event) => setTimelinePosition(Number(event.currentTarget.value))}
+              onChange={(event) => handleTimelineChange(Number(event.currentTarget.value))}
             />
             <output
               htmlFor="center-control-timeline-input"
               aria-live="polite"
               data-testid="center-control-timeline-value"
             >
-              {timelinePosition}%
+              {resolvedControlState.timelinePosition}%
             </output>
           </div>
         </div>
 
         <p className="status-line" aria-live="polite" data-testid="center-control-status">
-          Playback: {playBlocked ? "blocked" : effectiveIsPlaying ? "running" : "paused"}
+          Playback:{" "}
+          {playBlocked ? "blocked" : resolvedControlState.isPlaying ? "running" : "paused"}
         </p>
         {playBlocked && (
           <p className="status-line" aria-live="polite" data-testid="center-control-blocked-reason">

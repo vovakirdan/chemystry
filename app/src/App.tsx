@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AppShell from "./app/layout/AppShell";
-import reactLogo from "./assets/react.svg";
 import CenterPanelSkeleton, {
   CENTER_TIMELINE_INITIAL,
   type CenterPanelControlState,
@@ -46,7 +45,6 @@ import {
   createSubstanceV1,
   deleteSubstanceV1,
   ensureFeatureEnabledV1,
-  greetV1,
   healthV1,
   isCommandErrorV1,
   listPresetsV1,
@@ -100,6 +98,11 @@ const DEFAULT_CENTER_PANEL_STATE: Readonly<CenterPanelControlState> = {
   timelinePosition: CENTER_TIMELINE_INITIAL,
 };
 
+const RESET_CENTER_PANEL_STATE: Readonly<CenterPanelControlState> = {
+  isPlaying: false,
+  timelinePosition: 0,
+};
+
 const DEFAULT_RUNTIME_SETTINGS: Readonly<RightPanelRuntimeSettings> = {
   temperatureC: 25,
   pressureAtm: 1,
@@ -137,6 +140,26 @@ type LaunchValidationModel = {
 type BuilderRuntimeSnapshot = {
   builderDraft: BuilderDraft;
   runtimeSettings: RightPanelRuntimeSettings;
+  simulationControlState: CenterPanelControlState;
+};
+
+type SimulationLifecycleCommand = "start" | "pause" | "reset";
+
+type SimulationLifecycleCommandInput = {
+  command: SimulationLifecycleCommand;
+  simulationControlState: CenterPanelControlState;
+  runtimeSettings: RightPanelRuntimeSettings;
+  builderDraft: BuilderDraft | null;
+  launchBlocked: boolean;
+  baselineSnapshot: BuilderRuntimeSnapshot | null;
+};
+
+type SimulationLifecycleCommandResult = {
+  simulationControlState: CenterPanelControlState;
+  runtimeSettings: RightPanelRuntimeSettings;
+  builderDraft: BuilderDraft | null;
+  runtimeSettingsChanged: boolean;
+  builderDraftChanged: boolean;
 };
 
 function createBuilderParticipantLabelLookup(
@@ -641,13 +664,175 @@ function cloneRuntimeSettings(settings: RightPanelRuntimeSettings): RightPanelRu
   };
 }
 
+function cloneSimulationControlState(state: CenterPanelControlState): CenterPanelControlState {
+  return {
+    ...state,
+  };
+}
+
+function createPausedSimulationControlState(
+  state: CenterPanelControlState,
+): CenterPanelControlState {
+  return {
+    ...cloneSimulationControlState(state),
+    isPlaying: false,
+  };
+}
+
+function areSimulationControlStatesEqual(
+  left: CenterPanelControlState,
+  right: CenterPanelControlState,
+): boolean {
+  return left.isPlaying === right.isPlaying && left.timelinePosition === right.timelinePosition;
+}
+
+function areRuntimeSettingsEqual(
+  left: RightPanelRuntimeSettings,
+  right: RightPanelRuntimeSettings,
+): boolean {
+  return (
+    left.temperatureC === right.temperatureC &&
+    left.pressureAtm === right.pressureAtm &&
+    left.calculationPasses === right.calculationPasses &&
+    left.precisionProfile === right.precisionProfile &&
+    left.fpsLimit === right.fpsLimit
+  );
+}
+
+function areBuilderDraftsEqual(left: BuilderDraft | null, right: BuilderDraft | null): boolean {
+  if (left === right) {
+    return true;
+  }
+
+  if (left === null || right === null) {
+    return left === right;
+  }
+
+  if (
+    left.title !== right.title ||
+    left.reactionClass !== right.reactionClass ||
+    left.equation !== right.equation ||
+    left.description !== right.description ||
+    left.participants.length !== right.participants.length
+  ) {
+    return false;
+  }
+
+  return left.participants.every((participant, index) => {
+    const candidate = right.participants[index];
+    if (candidate === undefined) {
+      return false;
+    }
+
+    return (
+      participant.id === candidate.id &&
+      participant.substanceId === candidate.substanceId &&
+      participant.role === candidate.role &&
+      participant.stoichCoeffInput === candidate.stoichCoeffInput &&
+      participant.phase === candidate.phase &&
+      participant.amountMolInput === candidate.amountMolInput &&
+      participant.massGInput === candidate.massGInput &&
+      participant.volumeLInput === candidate.volumeLInput
+    );
+  });
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function applySimulationLifecycleCommand(
+  input: SimulationLifecycleCommandInput,
+): SimulationLifecycleCommandResult {
+  if (input.command === "start") {
+    if (input.launchBlocked || input.simulationControlState.isPlaying) {
+      return {
+        simulationControlState: input.simulationControlState,
+        runtimeSettings: input.runtimeSettings,
+        builderDraft: input.builderDraft,
+        runtimeSettingsChanged: false,
+        builderDraftChanged: false,
+      };
+    }
+
+    return {
+      simulationControlState: {
+        ...input.simulationControlState,
+        isPlaying: true,
+      },
+      runtimeSettings: input.runtimeSettings,
+      builderDraft: input.builderDraft,
+      runtimeSettingsChanged: false,
+      builderDraftChanged: false,
+    };
+  }
+
+  if (input.command === "pause") {
+    if (!input.simulationControlState.isPlaying) {
+      return {
+        simulationControlState: input.simulationControlState,
+        runtimeSettings: input.runtimeSettings,
+        builderDraft: input.builderDraft,
+        runtimeSettingsChanged: false,
+        builderDraftChanged: false,
+      };
+    }
+
+    return {
+      simulationControlState: {
+        ...input.simulationControlState,
+        isPlaying: false,
+      },
+      runtimeSettings: input.runtimeSettings,
+      builderDraft: input.builderDraft,
+      runtimeSettingsChanged: false,
+      builderDraftChanged: false,
+    };
+  }
+
+  const resetSimulationTarget =
+    input.baselineSnapshot === null
+      ? RESET_CENTER_PANEL_STATE
+      : input.baselineSnapshot.simulationControlState;
+  const resetRuntimeTarget =
+    input.baselineSnapshot === null
+      ? DEFAULT_RUNTIME_SETTINGS
+      : input.baselineSnapshot.runtimeSettings;
+  const resetBuilderTarget =
+    input.baselineSnapshot === null ? input.builderDraft : input.baselineSnapshot.builderDraft;
+
+  const simulationControlState = areSimulationControlStatesEqual(
+    input.simulationControlState,
+    createPausedSimulationControlState(resetSimulationTarget),
+  )
+    ? input.simulationControlState
+    : createPausedSimulationControlState(resetSimulationTarget);
+
+  const runtimeSettings = areRuntimeSettingsEqual(input.runtimeSettings, resetRuntimeTarget)
+    ? input.runtimeSettings
+    : cloneRuntimeSettings(resetRuntimeTarget);
+
+  const builderDraft = areBuilderDraftsEqual(input.builderDraft, resetBuilderTarget)
+    ? input.builderDraft
+    : resetBuilderTarget === null
+      ? null
+      : cloneBuilderDraft(resetBuilderTarget);
+
+  return {
+    simulationControlState,
+    runtimeSettings,
+    builderDraft,
+    runtimeSettingsChanged: runtimeSettings !== input.runtimeSettings,
+    builderDraftChanged: builderDraft !== input.builderDraft,
+  };
+}
+
 function createBuilderRuntimeSnapshot(
   draft: BuilderDraft,
   runtimeSettings: RightPanelRuntimeSettings,
+  simulationControlState: CenterPanelControlState,
 ): BuilderRuntimeSnapshot {
   return {
     builderDraft: cloneBuilderDraft(draft),
     runtimeSettings: cloneRuntimeSettings(runtimeSettings),
+    simulationControlState: createPausedSimulationControlState(simulationControlState),
   };
 }
 
@@ -662,6 +847,7 @@ function createSnapshotFromScenarioPayload(payload: ScenarioPayloadV1): BuilderR
   return {
     builderDraft: cloneBuilderDraft(payload.builderDraft),
     runtimeSettings: cloneRuntimeSettings(payload.runtimeSettings),
+    simulationControlState: cloneSimulationControlState(RESET_CENTER_PANEL_STATE),
   };
 }
 
@@ -687,9 +873,7 @@ function sortScenariosByUpdatedAt(
 function App() {
   const [activeLeftPanelTab, setActiveLeftPanelTab] =
     useState<LeftPanelTabId>(readStoredLeftPanelTab);
-  const [greetMsg, setGreetMsg] = useState("");
   const [healthMsg, setHealthMsg] = useState("Checking backend health...");
-  const [name, setName] = useState("");
   const [featureFlags, setFeatureFlags] = useState<Readonly<FeatureFlags>>(DEFAULT_FEATURE_FLAGS);
   const [featureFlagsMsg, setFeatureFlagsMsg] = useState("Loading feature flags...");
   const [featurePathMsg, setFeaturePathMsg] = useState("");
@@ -952,25 +1136,6 @@ function App() {
     previousRuntimeSettingsRef.current = runtimeSettings;
   }, [enqueueNotification, runtimeSettings]);
 
-  async function greet() {
-    try {
-      const result = await greetV1({ name });
-      setGreetMsg(`${result.message} (ref: ${result.requestId})`);
-      enqueueNotification("info", `Greeting completed for "${name || "anonymous"}".`);
-    } catch (error: unknown) {
-      if (isCommandErrorV1(error)) {
-        const message = formatCommandError(error);
-        setGreetMsg(message);
-        enqueueNotification("error", message);
-        return;
-      }
-
-      const message = `Unexpected error: ${String(error)}`;
-      setGreetMsg(message);
-      enqueueNotification("error", message);
-    }
-  }
-
   function triggerFeaturePath(feature: FeatureFlagKey) {
     try {
       ensureFeatureEnabledV1(featureFlags, feature);
@@ -1132,6 +1297,23 @@ function App() {
   const isLaunchBlocked = launchValidationModel.hasErrors;
   const launchBlockedReason = launchValidationModel.firstError;
 
+  useEffect(() => {
+    if (!isLaunchBlocked) {
+      return;
+    }
+
+    setSimulationControlState((currentState) => {
+      if (!currentState.isPlaying) {
+        return currentState;
+      }
+
+      return {
+        ...currentState,
+        isPlaying: false,
+      };
+    });
+  }, [isLaunchBlocked]);
+
   const placeholderStateByTab: Readonly<Record<LeftPanelTabId, LeftPanelPlaceholderState>> =
     useMemo(
       () => ({
@@ -1256,7 +1438,11 @@ function App() {
       return;
     }
 
-    const snapshot = createBuilderRuntimeSnapshot(builderDraft, runtimeSettings);
+    const snapshot = createBuilderRuntimeSnapshot(
+      builderDraft,
+      runtimeSettings,
+      simulationControlState,
+    );
     setScenarioActionState("saving");
 
     try {
@@ -1297,7 +1483,13 @@ function App() {
     } finally {
       setScenarioActionState("idle");
     }
-  }, [builderDraft, enqueueNotification, runtimeSettings, scenarioNameInput]);
+  }, [
+    builderDraft,
+    enqueueNotification,
+    runtimeSettings,
+    scenarioNameInput,
+    simulationControlState,
+  ]);
 
   const handleLoadScenario = useCallback(async (): Promise<void> => {
     if (selectedScenarioId === null) {
@@ -1315,6 +1507,7 @@ function App() {
 
       setBuilderDraft(snapshot.builderDraft);
       setRuntimeSettings(snapshot.runtimeSettings);
+      setSimulationControlState(snapshot.simulationControlState);
       setRightPanelSyncRevision((current) => current + 1);
       setScenarioNameInput(stripGeneratedScenarioNameSuffix(result.scenarioName));
       setSelectedScenarioId(result.scenarioId);
@@ -1340,9 +1533,11 @@ function App() {
       return;
     }
 
-    setBaselineSnapshot(createBuilderRuntimeSnapshot(builderDraft, runtimeSettings));
+    setBaselineSnapshot(
+      createBuilderRuntimeSnapshot(builderDraft, runtimeSettings, simulationControlState),
+    );
     enqueueNotification("info", "Baseline snapshot updated.");
-  }, [builderDraft, enqueueNotification, runtimeSettings]);
+  }, [builderDraft, enqueueNotification, runtimeSettings, simulationControlState]);
 
   const handleRevertToBaseline = useCallback((): void => {
     if (baselineSnapshot === null) {
@@ -1350,11 +1545,38 @@ function App() {
       return;
     }
 
-    setBuilderDraft(cloneBuilderDraft(baselineSnapshot.builderDraft));
-    setRuntimeSettings(cloneRuntimeSettings(baselineSnapshot.runtimeSettings));
-    setRightPanelSyncRevision((current) => current + 1);
-    enqueueNotification("info", "Reverted Builder and runtime settings to baseline snapshot.");
-  }, [baselineSnapshot, enqueueNotification]);
+    const result = applySimulationLifecycleCommand({
+      command: "reset",
+      simulationControlState,
+      runtimeSettings,
+      builderDraft,
+      launchBlocked: isLaunchBlocked,
+      baselineSnapshot,
+    });
+
+    if (result.simulationControlState !== simulationControlState) {
+      setSimulationControlState(result.simulationControlState);
+    }
+    if (result.runtimeSettingsChanged) {
+      setRuntimeSettings(result.runtimeSettings);
+      setRightPanelSyncRevision((current) => current + 1);
+    }
+    if (result.builderDraftChanged) {
+      setBuilderDraft(result.builderDraft);
+    }
+
+    enqueueNotification(
+      "info",
+      "Reverted Builder, runtime settings, and timeline to baseline snapshot.",
+    );
+  }, [
+    baselineSnapshot,
+    builderDraft,
+    enqueueNotification,
+    isLaunchBlocked,
+    runtimeSettings,
+    simulationControlState,
+  ]);
 
   const handleUsePresetInBuilder = useCallback(
     (presetId: string): void => {
@@ -1530,8 +1752,54 @@ function App() {
     }),
   );
 
-  const handleSimulationControlsChange = useCallback((state: CenterPanelControlState): void => {
-    setSimulationControlState(state);
+  const executeSimulationLifecycleCommand = useCallback(
+    (command: SimulationLifecycleCommand): void => {
+      const result = applySimulationLifecycleCommand({
+        command,
+        simulationControlState,
+        runtimeSettings,
+        builderDraft,
+        launchBlocked: isLaunchBlocked,
+        baselineSnapshot,
+      });
+
+      if (result.simulationControlState !== simulationControlState) {
+        setSimulationControlState(result.simulationControlState);
+      }
+      if (result.runtimeSettingsChanged) {
+        setRuntimeSettings(result.runtimeSettings);
+        setRightPanelSyncRevision((current) => current + 1);
+      }
+      if (result.builderDraftChanged) {
+        setBuilderDraft(result.builderDraft);
+      }
+    },
+    [baselineSnapshot, builderDraft, isLaunchBlocked, runtimeSettings, simulationControlState],
+  );
+
+  const handleSimulationStart = useCallback((): void => {
+    executeSimulationLifecycleCommand("start");
+  }, [executeSimulationLifecycleCommand]);
+
+  const handleSimulationPause = useCallback((): void => {
+    executeSimulationLifecycleCommand("pause");
+  }, [executeSimulationLifecycleCommand]);
+
+  const handleSimulationReset = useCallback((): void => {
+    executeSimulationLifecycleCommand("reset");
+  }, [executeSimulationLifecycleCommand]);
+
+  const handleSimulationTimelinePositionChange = useCallback((timelinePosition: number): void => {
+    setSimulationControlState((currentState) => {
+      if (currentState.timelinePosition === timelinePosition) {
+        return currentState;
+      }
+
+      return {
+        ...currentState,
+        timelinePosition,
+      };
+    });
   }, []);
 
   const handleRuntimeSettingsChange = useCallback((state: RightPanelRuntimeSettings): void => {
@@ -1622,29 +1890,39 @@ function App() {
         }
         centerPanel={
           <CenterPanelSkeleton
-            onSimulationControlsChange={handleSimulationControlsChange}
+            controlState={simulationControlState}
+            onSimulationStart={handleSimulationStart}
+            onSimulationPause={handleSimulationPause}
+            onSimulationReset={handleSimulationReset}
+            onSimulationTimelinePositionChange={handleSimulationTimelinePositionChange}
             playBlocked={isLaunchBlocked}
             playBlockedReason={launchBlockedReason}
           >
             <header className="center-header">
-              <h1>Welcome to Tauri + React</h1>
+              <h1>Simulation workspace</h1>
               <p>
-                The app shell is split into left, center, and right panels while keeping the
-                original demo actions available in the center workspace.
+                Validate launch readiness, control simulation lifecycle, and monitor session state
+                from a single control surface.
               </p>
             </header>
 
-            <div className="logo-row">
-              <a href="https://vite.dev" target="_blank" rel="noreferrer">
-                <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-              </a>
-              <a href="https://tauri.app" target="_blank" rel="noreferrer">
-                <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-              </a>
-              <a href="https://react.dev" target="_blank" rel="noreferrer">
-                <img src={reactLogo} className="logo react" alt="React logo" />
-              </a>
-            </div>
+            <section
+              id="simulation-workspace-summary"
+              className="content-card"
+              aria-label="Simulation session summary card"
+              data-testid="simulation-workspace-summary"
+            >
+              <h2>Simulation session</h2>
+              <p data-testid="simulation-workspace-state">State: {simulationStateLabel}</p>
+              <p data-testid="simulation-workspace-timeline">
+                Timeline: {simulationControlState.timelinePosition}%
+              </p>
+              <p data-testid="simulation-workspace-baseline">
+                {baselineSnapshot === null
+                  ? "Baseline snapshot is not set. Reset returns timeline and runtime controls to defaults."
+                  : "Baseline snapshot is set. Reset restores Builder draft, timeline, and runtime controls."}
+              </p>
+            </section>
 
             <section
               id="pre-run-validation"
@@ -1688,8 +1966,12 @@ function App() {
               <p>{featureFlagsMsg}</p>
             </section>
 
-            <section id="feature-flags" className="content-card" aria-label="Feature paths card">
-              <h2>Feature paths</h2>
+            <section
+              id="feature-flags"
+              className="content-card"
+              aria-label="Capability checks card"
+            >
+              <h2>Capability checks</h2>
               <ul className="status-list">
                 {FEATURE_KEYS.map((feature) => (
                   <li key={feature}>
@@ -1707,26 +1989,6 @@ function App() {
               </div>
 
               <p>{featurePathMsg}</p>
-            </section>
-
-            <section id="greet-form" className="content-card" aria-label="Greeting demo card">
-              <h2>Greeting demo</h2>
-              <form
-                className="greet-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  greet();
-                }}
-              >
-                <input
-                  id="greet-input"
-                  onChange={(e) => setName(e.currentTarget.value)}
-                  value={name}
-                  placeholder="Enter a name..."
-                />
-                <button type="submit">Greet</button>
-              </form>
-              <p>{greetMsg}</p>
             </section>
           </CenterPanelSkeleton>
         }
