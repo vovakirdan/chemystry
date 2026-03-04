@@ -14,6 +14,7 @@ This template should help get you started developing with Tauri, React and Types
 Run once on a clean clone:
 
 - `npm install`
+- `npm run hooks:install` (optional manual re-install; this also runs automatically via `prepare`)
 
 Frontend/tooling:
 
@@ -23,6 +24,8 @@ Frontend/tooling:
 - `npm run test` - run Vitest (`--passWithNoTests` enabled).
 - `npm run format` - format files with Prettier.
 - `npm run format:check` - verify Prettier formatting.
+- `npm run precommit:check` - run pre-commit staged-file checks manually.
+- `npm run hooks:install` - configure git to use repo-local hooks (`app/.githooks`).
 
 Rust aliases (from `app/` root):
 
@@ -30,6 +33,13 @@ Rust aliases (from `app/` root):
 - `npm run rust:fmt:check` - check Rust formatting.
 - `npm run rust:clippy` - run clippy on all targets/features.
 - `npm run rust:test` - run Rust tests.
+
+## Hooks and CI
+
+- Pre-commit hook checks only staged files under `app/`:
+  - formatting with Prettier (`--check --ignore-unknown`)
+  - linting with ESLint for staged JS/TS files
+- CI runs `npm run format:check`, `npm run lint`, `npm run test`, and `npm run build`.
 
 ## Structure Scaffold (E01-T03)
 
