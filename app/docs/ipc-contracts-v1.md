@@ -39,6 +39,20 @@ This document defines the baseline versioned IPC contracts shared by frontend an
 }
 ```
 
+### `GetFeatureFlagsV1Output`
+
+```json
+{
+  "version": "v1",
+  "requestId": "string",
+  "featureFlags": {
+    "simulation": "boolean",
+    "importExport": "boolean",
+    "advancedPrecision": "boolean"
+  }
+}
+```
+
 ### `CommandErrorV1`
 
 ```json
@@ -57,6 +71,7 @@ This document defines the baseline versioned IPC contracts shared by frontend an
 | --- | --- | --- | --- |
 | `greet_v1` | `GreetV1Input` | `GreetV1Output` | `CommandErrorV1` |
 | `health_v1` | `{}` (no input payload) | `HealthV1Output` | `CommandErrorV1` (reserved for future failures) |
+| `get_feature_flags_v1` | `{}` (no input payload) | `GetFeatureFlagsV1Output` | `CommandErrorV1` (reserved for future failures) |
 
 ## Validation Baseline (Rust Side)
 
@@ -71,3 +86,11 @@ This document defines the baseline versioned IPC contracts shared by frontend an
 
 - Backend emits lightweight logs for each command start/success/failure with `request_id`.
 - Frontend maps backend error categories/codes to user-facing messages and includes `requestId` for support correlation.
+
+## Feature Flag Notes
+
+- `get_feature_flags_v1` reports backend-resolved module availability for:
+  - `simulation`
+  - `importExport`
+  - `advancedPrecision`
+- Detailed operational behavior and environment variable mapping are documented in `docs/feature-flags.md`.

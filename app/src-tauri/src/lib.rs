@@ -1,4 +1,5 @@
 pub mod infra {
+    pub mod config;
     pub mod errors;
     pub mod logging;
 }
@@ -30,7 +31,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             ipc_v1::greet_v1,
-            ipc_v1::health_v1
+            ipc_v1::health_v1,
+            ipc_v1::get_feature_flags_v1
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

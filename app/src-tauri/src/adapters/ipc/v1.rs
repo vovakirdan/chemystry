@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::infra::config::feature_flags::FeatureFlags as ConfigFeatureFlags;
 use crate::infra::errors::{CommandError, CommandResult};
 use crate::infra::logging;
 
@@ -7,6 +8,7 @@ pub const CONTRACT_VERSION_V1: &str = "v1";
 const MAX_NAME_LENGTH: usize = 64;
 const GREET_COMMAND_NAME: &str = "greet_v1";
 const HEALTH_COMMAND_NAME: &str = "health_v1";
+const GET_FEATURE_FLAGS_COMMAND_NAME: &str = "get_feature_flags_v1";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +30,32 @@ pub struct HealthV1Output {
     pub version: &'static str,
     pub request_id: String,
     pub status: &'static str,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FeatureFlagsV1 {
+    pub simulation: bool,
+    pub import_export: bool,
+    pub advanced_precision: bool,
+}
+
+impl From<ConfigFeatureFlags> for FeatureFlagsV1 {
+    fn from(value: ConfigFeatureFlags) -> Self {
+        Self {
+            simulation: value.simulation,
+            import_export: value.import_export,
+            advanced_precision: value.advanced_precision,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GetFeatureFlagsV1Output {
+    pub version: &'static str,
+    pub request_id: String,
+    pub feature_flags: FeatureFlagsV1,
 }
 
 pub type CommandErrorV1 = CommandError;
@@ -103,6 +131,21 @@ pub fn health_v1() -> HealthV1Output {
     output
 }
 
+#[tauri::command]
+pub fn get_feature_flags_v1() -> GetFeatureFlagsV1Output {
+    let request_id = logging::next_request_id();
+    logging::log_command_start(GET_FEATURE_FLAGS_COMMAND_NAME, &request_id);
+
+    let output = GetFeatureFlagsV1Output {
+        version: CONTRACT_VERSION_V1,
+        request_id,
+        feature_flags: ConfigFeatureFlags::from_env().into(),
+    };
+
+    logging::log_command_success(GET_FEATURE_FLAGS_COMMAND_NAME, &output.request_id);
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,6 +195,24 @@ mod tests {
         assert_eq!(
             error.message,
             format!("`name` must be at most {MAX_NAME_LENGTH} characters.")
+        );
+    }
+
+    #[test]
+    fn maps_config_feature_flags_to_contract_payload() {
+        let flags = FeatureFlagsV1::from(ConfigFeatureFlags {
+            simulation: false,
+            import_export: true,
+            advanced_precision: false,
+        });
+
+        assert_eq!(
+            flags,
+            FeatureFlagsV1 {
+                simulation: false,
+                import_export: true,
+                advanced_precision: false,
+            }
         );
     }
 }
