@@ -36,7 +36,7 @@ function CenterPanelSkeleton({
 
   const playDisabled = effectiveIsPlaying || playBlocked;
   const playUnavailableHint =
-    playBlockedReason ?? "Play is blocked until Builder validation errors are fixed.";
+    playBlockedReason ?? "Play is blocked until pre-run checks are fixed.";
 
   function resetControls(): void {
     setIsPlaying(false);

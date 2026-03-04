@@ -251,6 +251,14 @@ describe("CenterPanelSkeleton launch blocking", () => {
       "Play disabled: Mass (g) for participant &quot;participant-1&quot; cannot be negative.",
     );
   });
+
+  it("keeps Play available when blocking conditions are removed", () => {
+    const html = renderToStaticMarkup(<CenterPanelSkeleton playBlocked={false} />);
+
+    expect(html).toContain('data-testid="center-control-play"');
+    expect(html).not.toContain('data-testid="center-control-play" disabled=""');
+    expect(html).not.toContain("Playback: blocked");
+  });
 });
 
 describe("LeftPanelSkeleton presets and builder tabs", () => {

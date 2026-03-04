@@ -96,9 +96,313 @@ const DEFAULT_CENTER_PANEL_STATE: Readonly<CenterPanelControlState> = {
 };
 
 const DEFAULT_RUNTIME_SETTINGS: Readonly<RightPanelRuntimeSettings> = {
+  temperatureC: 25,
+  pressureAtm: 1,
+  calculationPasses: 250,
   precisionProfile: "Balanced",
   fpsLimit: 60,
 };
+
+const MIN_TEMPERATURE_C = -273.15;
+const MAX_TEMPERATURE_C = 1000;
+const MIN_PRESSURE_ATM = 0.1;
+const MAX_PRESSURE_ATM = 50;
+const MIN_CALCULATION_PASSES = 1;
+const MAX_CALCULATION_PASSES = 10_000;
+const MIN_FPS_LIMIT = 15;
+const MAX_FPS_LIMIT = 240;
+const HIGH_PRECISION_MAX_FPS = 120;
+const CUSTOM_PRECISION_MIN_PASSES = 50;
+
+type LaunchValidationSectionId = "builder" | "environment" | "calculations";
+
+type LaunchValidationSection = {
+  id: LaunchValidationSectionId;
+  title: string;
+  errors: ReadonlyArray<string>;
+};
+
+type LaunchValidationModel = {
+  sections: ReadonlyArray<LaunchValidationSection>;
+  hasErrors: boolean;
+  firstError: string | null;
+};
+
+function createBuilderParticipantLabelLookup(
+  draft: BuilderDraft,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): ReadonlyMap<string, string> {
+  const labels = new Map<string, string>();
+
+  draft.participants.forEach((participant, index) => {
+    const baseLabel = `Participant ${(index + 1).toString()}`;
+    const substanceName =
+      substances.find((substance) => substance.id === participant.substanceId)?.name ?? null;
+    const label = substanceName === null ? baseLabel : `${baseLabel} (${substanceName})`;
+
+    labels.set(participant.id, label);
+  });
+
+  return labels;
+}
+
+function resolveBuilderParticipantLabel(
+  participantId: string,
+  fallbackIndex: number,
+  labelsByParticipantId: ReadonlyMap<string, string>,
+): string {
+  return (
+    labelsByParticipantId.get(participantId) ?? `Participant ${(fallbackIndex + 1).toString()}`
+  );
+}
+
+function toActionableBuilderValidationError(
+  error: string,
+  labelsByParticipantId: ReadonlyMap<string, string>,
+): string {
+  const phaseMatch = /^Participant "(.+)" has unsupported phase value\.$/u.exec(error);
+  if (phaseMatch) {
+    const participantLabel = labelsByParticipantId.get(phaseMatch[1]) ?? "Selected participant";
+    return `${participantLabel}: choose a valid phase.`;
+  }
+
+  const fieldPatterns: ReadonlyArray<{
+    sourceLabel: string;
+    targetLabel: string;
+    suffix: string;
+    messageSuffix: string;
+  }> = [
+    {
+      sourceLabel: "Stoich coeff",
+      targetLabel: "reaction coefficient",
+      suffix: "must be a number.",
+      messageSuffix: "must be a number.",
+    },
+    {
+      sourceLabel: "Stoich coeff",
+      targetLabel: "reaction coefficient",
+      suffix: "cannot be negative.",
+      messageSuffix: "must be greater than 0.",
+    },
+    {
+      sourceLabel: "Amount (mol)",
+      targetLabel: "amount in mol",
+      suffix: "must be a number.",
+      messageSuffix: "must be a number.",
+    },
+    {
+      sourceLabel: "Amount (mol)",
+      targetLabel: "amount in mol",
+      suffix: "cannot be negative.",
+      messageSuffix: "cannot be negative.",
+    },
+    {
+      sourceLabel: "Mass (g)",
+      targetLabel: "mass in grams",
+      suffix: "must be a number.",
+      messageSuffix: "must be a number.",
+    },
+    {
+      sourceLabel: "Mass (g)",
+      targetLabel: "mass in grams",
+      suffix: "cannot be negative.",
+      messageSuffix: "cannot be negative.",
+    },
+    {
+      sourceLabel: "Volume (L)",
+      targetLabel: "volume in liters",
+      suffix: "must be a number.",
+      messageSuffix: "must be a number.",
+    },
+    {
+      sourceLabel: "Volume (L)",
+      targetLabel: "volume in liters",
+      suffix: "cannot be negative.",
+      messageSuffix: "cannot be negative.",
+    },
+  ];
+
+  for (const pattern of fieldPatterns) {
+    const fieldMatch = new RegExp(
+      `^${pattern.sourceLabel.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")} for participant "(.+)" ${pattern.suffix.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`,
+      "u",
+    ).exec(error);
+    if (fieldMatch) {
+      const participantLabel = labelsByParticipantId.get(fieldMatch[1]) ?? "Selected participant";
+      return `${participantLabel}: ${pattern.targetLabel} ${pattern.messageSuffix}`;
+    }
+  }
+
+  return "Check Builder participant values before starting.";
+}
+
+function collectBuilderValidationErrors(
+  draft: BuilderDraft | null,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): ReadonlyArray<string> {
+  if (draft === null) {
+    return ['Load a preset in Builder, then add participants before pressing "Play".'];
+  }
+
+  const errors = new Set<string>();
+  const labelsByParticipantId = createBuilderParticipantLabelLookup(draft, substances);
+  const participants = draft.participants;
+  if (participants.length === 0) {
+    errors.add("Add at least one participant in Builder.");
+  }
+
+  const hasReactant = participants.some((participant) => participant.role === "reactant");
+  const hasProduct = participants.some((participant) => participant.role === "product");
+  if (!hasReactant) {
+    errors.add("Mark at least one participant as a reactant.");
+  }
+  if (!hasProduct) {
+    errors.add("Mark at least one participant as a product.");
+  }
+
+  for (const [participantIndex, participant] of participants.entries()) {
+    const participantLabel = resolveBuilderParticipantLabel(
+      participant.id,
+      participantIndex,
+      labelsByParticipantId,
+    );
+    const normalizedCoeff = participant.stoichCoeffInput.trim();
+    if (normalizedCoeff.length === 0) {
+      errors.add(`${participantLabel}: enter a reaction coefficient.`);
+      continue;
+    }
+
+    const parsedCoeff = Number(normalizedCoeff);
+    if (Number.isFinite(parsedCoeff) && parsedCoeff <= 0) {
+      errors.add(`${participantLabel}: reaction coefficient must be greater than 0.`);
+    }
+
+    if (participant.amountMolInput.trim().length === 0) {
+      errors.add(`${participantLabel}: enter amount in mol.`);
+    }
+    if (participant.massGInput.trim().length === 0) {
+      errors.add(`${participantLabel}: enter mass in grams.`);
+    }
+    if (participant.volumeLInput.trim().length === 0) {
+      errors.add(`${participantLabel}: enter volume in liters.`);
+    }
+  }
+
+  for (const error of validateBuilderDraftForLaunch(draft)) {
+    errors.add(toActionableBuilderValidationError(error, labelsByParticipantId));
+  }
+
+  return Array.from(errors);
+}
+
+function collectEnvironmentValidationErrors(
+  settings: RightPanelRuntimeSettings,
+): ReadonlyArray<string> {
+  const errors: string[] = [];
+
+  if (settings.temperatureC === null) {
+    errors.push("Enter temperature in Environment.");
+  } else if (
+    settings.temperatureC < MIN_TEMPERATURE_C ||
+    settings.temperatureC > MAX_TEMPERATURE_C
+  ) {
+    errors.push(`Set temperature between ${MIN_TEMPERATURE_C}°C and ${MAX_TEMPERATURE_C}°C.`);
+  }
+
+  if (settings.pressureAtm === null) {
+    errors.push("Enter pressure in Environment.");
+  } else if (settings.pressureAtm < MIN_PRESSURE_ATM || settings.pressureAtm > MAX_PRESSURE_ATM) {
+    errors.push(`Set pressure between ${MIN_PRESSURE_ATM} atm and ${MAX_PRESSURE_ATM} atm.`);
+  }
+
+  return errors;
+}
+
+function collectCalculationsValidationErrors(
+  settings: RightPanelRuntimeSettings,
+): ReadonlyArray<string> {
+  const errors: string[] = [];
+
+  if (settings.calculationPasses === null) {
+    errors.push("Enter iteration passes in Calculations.");
+  } else if (!Number.isInteger(settings.calculationPasses)) {
+    errors.push("Iteration passes must be a whole number.");
+  } else if (
+    settings.calculationPasses < MIN_CALCULATION_PASSES ||
+    settings.calculationPasses > MAX_CALCULATION_PASSES
+  ) {
+    errors.push(
+      `Set iteration passes between ${MIN_CALCULATION_PASSES} and ${MAX_CALCULATION_PASSES}.`,
+    );
+  }
+
+  if (settings.fpsLimit === null) {
+    errors.push("Enter FPS limit in Calculations.");
+  } else if (!Number.isInteger(settings.fpsLimit)) {
+    errors.push("FPS limit must be a whole number.");
+  } else if (settings.fpsLimit < MIN_FPS_LIMIT || settings.fpsLimit > MAX_FPS_LIMIT) {
+    errors.push(`Set FPS limit between ${MIN_FPS_LIMIT} and ${MAX_FPS_LIMIT}.`);
+  }
+
+  if (settings.precisionProfile === "High Precision" && settings.fpsLimit !== null) {
+    if (settings.fpsLimit > HIGH_PRECISION_MAX_FPS) {
+      errors.push(
+        `High Precision works best at ${HIGH_PRECISION_MAX_FPS} FPS or lower. Lower FPS limit or choose another profile.`,
+      );
+    }
+  }
+
+  if (settings.precisionProfile === "Custom" && settings.calculationPasses !== null) {
+    if (settings.calculationPasses < CUSTOM_PRECISION_MIN_PASSES) {
+      errors.push(
+        `Custom precision needs at least ${CUSTOM_PRECISION_MIN_PASSES} iteration passes.`,
+      );
+    }
+  }
+
+  return errors;
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function buildLaunchValidationModel(
+  builderDraft: BuilderDraft | null,
+  runtimeSettings: RightPanelRuntimeSettings,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1> = [],
+): LaunchValidationModel {
+  const sections: ReadonlyArray<LaunchValidationSection> = [
+    {
+      id: "builder",
+      title: "Builder",
+      errors: collectBuilderValidationErrors(builderDraft, substances),
+    },
+    {
+      id: "environment",
+      title: "Environment",
+      errors: collectEnvironmentValidationErrors(runtimeSettings),
+    },
+    {
+      id: "calculations",
+      title: "Calculations",
+      errors: collectCalculationsValidationErrors(runtimeSettings),
+    },
+  ];
+
+  for (const section of sections) {
+    if (section.errors.length > 0) {
+      return {
+        sections,
+        hasErrors: true,
+        firstError: section.errors[0] ?? null,
+      };
+    }
+  }
+
+  return {
+    sections,
+    hasErrors: false,
+    firstError: null,
+  };
+}
 
 function readStoredLeftPanelTab(): LeftPanelTabId {
   if (typeof window === "undefined") {
@@ -511,7 +815,9 @@ function App() {
     }
 
     if (previousRuntimeSettings.fpsLimit !== runtimeSettings.fpsLimit) {
-      if (runtimeSettings.fpsLimit > 120) {
+      if (runtimeSettings.fpsLimit === null) {
+        // Skip notifications while the value is incomplete.
+      } else if (runtimeSettings.fpsLimit > 120) {
         enqueueNotification(
           "warn",
           `FPS limit ${runtimeSettings.fpsLimit} may reduce stability on low-end hardware.`,
@@ -674,14 +980,17 @@ function App() {
     [builderDraft],
   );
 
-  const builderLaunchValidationErrors = useMemo(
-    () => (builderDraft === null ? [] : validateBuilderDraftForLaunch(builderDraft)),
-    [builderDraft],
+  const launchValidationModel = useMemo(
+    () => buildLaunchValidationModel(builderDraft, runtimeSettings, allSubstances),
+    [allSubstances, builderDraft, runtimeSettings],
   );
+
+  const builderLaunchValidationErrors =
+    launchValidationModel.sections.find((section) => section.id === "builder")?.errors ?? [];
+
   const isBuilderLaunchBlocked = builderLaunchValidationErrors.length > 0;
-  const builderLaunchBlockedReason = isBuilderLaunchBlocked
-    ? (builderLaunchValidationErrors[0] ?? "Fix builder participant values.")
-    : null;
+  const isLaunchBlocked = launchValidationModel.hasErrors;
+  const launchBlockedReason = launchValidationModel.firstError;
 
   const placeholderStateByTab: Readonly<Record<LeftPanelTabId, LeftPanelPlaceholderState>> =
     useMemo(
@@ -969,6 +1278,8 @@ function App() {
     setRuntimeSettings(state);
   }, []);
 
+  const statusBarFpsLimit = runtimeSettings.fpsLimit ?? 60;
+
   return (
     <div className="app-root">
       <NotificationCenter notifications={notifications} onDismiss={dismissNotification} />
@@ -1034,8 +1345,8 @@ function App() {
         centerPanel={
           <CenterPanelSkeleton
             onSimulationControlsChange={handleSimulationControlsChange}
-            playBlocked={isBuilderLaunchBlocked}
-            playBlockedReason={builderLaunchBlockedReason}
+            playBlocked={isLaunchBlocked}
+            playBlockedReason={launchBlockedReason}
           >
             <header className="center-header">
               <h1>Welcome to Tauri + React</h1>
@@ -1056,6 +1367,42 @@ function App() {
                 <img src={reactLogo} className="logo react" alt="React logo" />
               </a>
             </div>
+
+            <section
+              id="pre-run-validation"
+              className={`content-card launch-validation-card${launchValidationModel.hasErrors ? " launch-validation-card--blocked" : " launch-validation-card--ready"}`}
+              aria-label="Pre-run validation card"
+              data-testid="launch-validation-card"
+            >
+              <h2>Pre-run checks</h2>
+              <p data-testid="launch-validation-status">
+                {launchValidationModel.hasErrors
+                  ? "Play is blocked until the issues below are fixed."
+                  : "All checks passed. Play is ready."}
+              </p>
+              <div className="launch-validation-groups" data-testid="launch-validation-groups">
+                {launchValidationModel.sections.map((section) => (
+                  <section
+                    key={section.id}
+                    className="launch-validation-section"
+                    data-testid={`launch-validation-section-${section.id}`}
+                  >
+                    <h3>{section.title}</h3>
+                    {section.errors.length === 0 ? (
+                      <p data-testid={`launch-validation-ok-${section.id}`}>No issues.</p>
+                    ) : (
+                      <ul data-testid={`launch-validation-errors-${section.id}`}>
+                        {section.errors.map((error, index) => (
+                          <li key={`${section.id}-validation-error-${index.toString()}`}>
+                            {error}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                ))}
+              </div>
+            </section>
 
             <section id="backend-health" className="content-card" aria-label="Backend health card">
               <h2>Backend health</h2>
@@ -1116,7 +1463,7 @@ function App() {
       <StatusBar
         simulationState={simulationStateLabel}
         precisionProfile={runtimeSettings.precisionProfile}
-        fpsLimit={runtimeSettings.fpsLimit}
+        fpsLimit={statusBarFpsLimit}
       />
     </div>
   );

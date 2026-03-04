@@ -45,15 +45,31 @@ const PRECISION_PROFILE_OPTIONS = ["Balanced", "High Precision", "Custom"] as co
 type PrecisionProfile = (typeof PRECISION_PROFILE_OPTIONS)[number];
 
 const DEFAULT_PRECISION_PROFILE: PrecisionProfile = "Balanced";
+const DEFAULT_TEMPERATURE_C = 25;
+const DEFAULT_PRESSURE_ATM = 1;
+const DEFAULT_CALCULATION_PASSES = 250;
 const DEFAULT_FPS_LIMIT = 60;
 
 export type RightPanelRuntimeSettings = {
+  temperatureC: number | null;
+  pressureAtm: number | null;
+  calculationPasses: number | null;
   precisionProfile: PrecisionProfile;
-  fpsLimit: number;
+  fpsLimit: number | null;
 };
 
 function isPrecisionProfile(value: string): value is PrecisionProfile {
   return PRECISION_PROFILE_OPTIONS.includes(value as PrecisionProfile);
+}
+
+function parseNumberInput(value: string): number | null {
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  const parsedValue = Number(normalized);
+  return Number.isFinite(parsedValue) ? parsedValue : null;
 }
 
 function RightPanelSkeleton({
@@ -65,28 +81,43 @@ function RightPanelSkeleton({
     DEFAULT_RIGHT_PANEL_SECTION,
   );
   const [ambientFogEnabled, setAmbientFogEnabled] = useState(false);
-  const [calculationPasses, setCalculationPasses] = useState("250");
+  const [temperatureCInput, setTemperatureCInput] = useState(String(DEFAULT_TEMPERATURE_C));
+  const [pressureAtmInput, setPressureAtmInput] = useState(String(DEFAULT_PRESSURE_ATM));
+  const [calculationPassesInput, setCalculationPassesInput] = useState(
+    String(DEFAULT_CALCULATION_PASSES),
+  );
   const [precisionProfile, setPrecisionProfile] =
     useState<PrecisionProfile>(DEFAULT_PRECISION_PROFILE);
   const [fpsLimitInput, setFpsLimitInput] = useState(String(DEFAULT_FPS_LIMIT));
   const [summaryNote, setSummaryNote] = useState("Initial scenario review pending.");
 
-  const normalizedFpsLimit = useMemo(() => {
-    const parsedValue = Number(fpsLimitInput);
-
-    if (!Number.isFinite(parsedValue) || parsedValue < 1) {
-      return DEFAULT_FPS_LIMIT;
-    }
-
-    return Math.round(parsedValue);
-  }, [fpsLimitInput]);
+  const parsedTemperatureC = useMemo(
+    () => parseNumberInput(temperatureCInput),
+    [temperatureCInput],
+  );
+  const parsedPressureAtm = useMemo(() => parseNumberInput(pressureAtmInput), [pressureAtmInput]);
+  const parsedCalculationPasses = useMemo(
+    () => parseNumberInput(calculationPassesInput),
+    [calculationPassesInput],
+  );
+  const parsedFpsLimit = useMemo(() => parseNumberInput(fpsLimitInput), [fpsLimitInput]);
 
   useEffect(() => {
     onRuntimeSettingsChange?.({
+      temperatureC: parsedTemperatureC,
+      pressureAtm: parsedPressureAtm,
+      calculationPasses: parsedCalculationPasses,
       precisionProfile,
-      fpsLimit: normalizedFpsLimit,
+      fpsLimit: parsedFpsLimit,
     });
-  }, [normalizedFpsLimit, onRuntimeSettingsChange, precisionProfile]);
+  }, [
+    onRuntimeSettingsChange,
+    parsedCalculationPasses,
+    parsedFpsLimit,
+    parsedPressureAtm,
+    parsedTemperatureC,
+    precisionProfile,
+  ]);
 
   return (
     <div className="right-panel-skeleton" data-testid="right-panel-skeleton">
@@ -151,6 +182,35 @@ function RightPanelSkeleton({
 
             {section.id === "environment" ? (
               <div className="right-panel-field">
+                <label htmlFor="right-panel-environment-temperature-input">Temperature (°C)</label>
+                <input
+                  id="right-panel-environment-temperature-input"
+                  type="number"
+                  step={0.1}
+                  aria-label="Environment temperature in Celsius"
+                  data-testid="right-panel-environment-temperature"
+                  value={temperatureCInput}
+                  onChange={(event) => setTemperatureCInput(event.currentTarget.value)}
+                />
+                <p className="status-line" data-testid="right-panel-environment-temperature-value">
+                  Temperature: {parsedTemperatureC === null ? "not set" : parsedTemperatureC}
+                  &deg;C
+                </p>
+
+                <label htmlFor="right-panel-environment-pressure-input">Pressure (atm)</label>
+                <input
+                  id="right-panel-environment-pressure-input"
+                  type="number"
+                  step={0.01}
+                  aria-label="Environment pressure in atmospheres"
+                  data-testid="right-panel-environment-pressure"
+                  value={pressureAtmInput}
+                  onChange={(event) => setPressureAtmInput(event.currentTarget.value)}
+                />
+                <p className="status-line" data-testid="right-panel-environment-pressure-value">
+                  Pressure: {parsedPressureAtm === null ? "not set" : parsedPressureAtm} atm
+                </p>
+
                 <label className="right-panel-toggle" htmlFor="right-panel-environment-fog-toggle">
                   <input
                     id="right-panel-environment-fog-toggle"
@@ -178,11 +238,12 @@ function RightPanelSkeleton({
                   step={1}
                   aria-label="Calculation iteration passes"
                   data-testid="right-panel-calculations-input"
-                  value={calculationPasses}
-                  onChange={(event) => setCalculationPasses(event.currentTarget.value)}
+                  value={calculationPassesInput}
+                  onChange={(event) => setCalculationPassesInput(event.currentTarget.value)}
                 />
                 <p className="status-line" data-testid="right-panel-calculations-value">
-                  Planned passes: {calculationPasses}
+                  Planned passes:{" "}
+                  {parsedCalculationPasses === null ? "not set" : parsedCalculationPasses}
                 </p>
 
                 <label htmlFor="right-panel-precision-profile-select">Precision profile</label>
@@ -221,7 +282,7 @@ function RightPanelSkeleton({
                   onChange={(event) => setFpsLimitInput(event.currentTarget.value)}
                 />
                 <p className="status-line" data-testid="right-panel-calculations-fps-value">
-                  FPS limit: {normalizedFpsLimit}
+                  FPS limit: {parsedFpsLimit === null ? "not set" : parsedFpsLimit}
                 </p>
               </div>
             ) : null}
