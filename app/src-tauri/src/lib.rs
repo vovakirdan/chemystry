@@ -6,6 +6,8 @@ pub mod infra {
 
 #[path = "adapters/ipc/v1.rs"]
 mod ipc_v1;
+#[path = "adapters/storage/mod.rs"]
+mod storage;
 
 // Legacy command kept for demo compatibility while `greet_v1` is introduced.
 #[tauri::command]
@@ -27,6 +29,10 @@ fn greet(name: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            storage::bootstrap_storage(app.handle())?;
+            Ok(())
+        })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             greet,
