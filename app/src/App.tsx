@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import AppShell from "./app/layout/AppShell";
 import reactLogo from "./assets/react.svg";
+import CenterPanelSkeleton from "./features/center-panel/CenterPanelSkeleton";
 import LeftPanelSkeleton from "./features/left-panel/LeftPanelSkeleton";
 import {
   DEFAULT_LEFT_PANEL_TAB,
@@ -8,6 +9,9 @@ import {
   type LeftPanelPlaceholderState,
   type LeftPanelTabId,
 } from "./features/left-panel/model";
+import RightPanelSkeleton, {
+  type RightPanelFeatureStatus,
+} from "./features/right-panel/RightPanelSkeleton";
 import type { FeatureFlagKey, FeatureFlags } from "./shared/config/featureFlags";
 import { DEFAULT_FEATURE_FLAGS } from "./shared/config/featureFlags";
 import {
@@ -180,6 +184,14 @@ function App() {
     return enabled ? "available" : "unavailable";
   }
 
+  const rightPanelFeatureStatuses: ReadonlyArray<RightPanelFeatureStatus> = FEATURE_KEYS.map(
+    (feature) => ({
+      id: feature,
+      label: FEATURE_LABEL_BY_KEY[feature],
+      availability: availabilityLabel(featureFlags[feature]),
+    }),
+  );
+
   return (
     <div className="app-root">
       <AppShell
@@ -191,7 +203,7 @@ function App() {
           />
         }
         centerPanel={
-          <>
+          <CenterPanelSkeleton>
             <header className="center-header">
               <h1>Welcome to Tauri + React</h1>
               <p>
@@ -258,40 +270,13 @@ function App() {
               </form>
               <p>{greetMsg}</p>
             </section>
-          </>
+          </CenterPanelSkeleton>
         }
         rightPanel={
-          <>
-            <h2 className="panel-title">Status</h2>
-            <p className="panel-description">
-              Live shell summary for the backend and feature gate state.
-            </p>
-
-            <p className="status-line">{healthMsg}</p>
-            <ul className="status-list">
-              {FEATURE_KEYS.map((feature) => (
-                <li key={feature}>
-                  {FEATURE_LABEL_BY_KEY[feature]}: {availabilityLabel(featureFlags[feature])}
-                </li>
-              ))}
-            </ul>
-
-            <h3 className="panel-subtitle">Panel shortcuts</h3>
-            <ul className="kbd-list" aria-label="Panel keyboard shortcuts">
-              <li>
-                <span>Left panel</span>
-                <kbd>Alt+1</kbd>
-              </li>
-              <li>
-                <span>Center panel</span>
-                <kbd>Alt+2</kbd>
-              </li>
-              <li>
-                <span>Right panel</span>
-                <kbd>Alt+3</kbd>
-              </li>
-            </ul>
-          </>
+          <RightPanelSkeleton
+            healthMessage={healthMsg}
+            featureStatuses={rightPanelFeatureStatuses}
+          />
         }
       />
     </div>
