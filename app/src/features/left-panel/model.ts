@@ -40,9 +40,21 @@ export interface BuilderDraft {
   reactionClass: ReactionClassV1;
   equation: string;
   description: string;
+  participants: ReadonlyArray<BuilderDraftParticipant>;
 }
 
-export type BuilderDraftField = keyof BuilderDraft;
+export const BUILDER_PARTICIPANT_ROLES = ["reactant", "product"] as const;
+export type BuilderParticipantRole = (typeof BUILDER_PARTICIPANT_ROLES)[number];
+
+export interface BuilderDraftParticipant {
+  id: string;
+  substanceId: string;
+  role: BuilderParticipantRole;
+  stoichCoeffInput: string;
+}
+
+export type BuilderDraftField = "title" | "reactionClass" | "equation" | "description";
+export type BuilderDraftParticipantField = "substanceId" | "role" | "stoichCoeffInput";
 
 export interface UserSubstanceFormInput {
   name: string;
@@ -68,6 +80,7 @@ export const DEFAULT_BUILDER_DRAFT: Readonly<BuilderDraft> = {
   reactionClass: "inorganic",
   equation: "",
   description: "",
+  participants: [],
 };
 
 const LIBRARY_PHASE_LABEL_BY_VALUE: Record<SubstancePhaseV1, string> = {
@@ -90,6 +103,8 @@ const REACTION_CLASS_LABEL_BY_VALUE: Record<ReactionClassV1, string> = {
   organic_basic: "Organic Basic",
   equilibrium: "Equilibrium",
 };
+
+const BUILDER_DRAFT_STORAGE_VERSION = 1;
 
 export const isLeftPanelTabId = (value: string): value is LeftPanelTabId =>
   LEFT_PANEL_TAB_IDS.includes(value as LeftPanelTabId);
@@ -116,6 +131,7 @@ export function createBuilderDraftFromPreset(preset: PresetCatalogEntryV1): Buil
     reactionClass: preset.reactionClass,
     equation: preset.equation,
     description: preset.description,
+    participants: [],
   };
 }
 
@@ -125,7 +141,7 @@ export function updateBuilderDraftField(
   value: string,
 ): BuilderDraft {
   if (field === "reactionClass") {
-    if (!(value in REACTION_CLASS_LABEL_BY_VALUE)) {
+    if (!isReactionClass(value)) {
       return draft;
     }
 
@@ -139,6 +155,127 @@ export function updateBuilderDraftField(
     ...draft,
     [field]: value,
   };
+}
+
+export function addBuilderDraftParticipant(
+  draft: BuilderDraft,
+  participant: BuilderDraftParticipant,
+): BuilderDraft {
+  if (
+    participant.id.trim().length === 0 ||
+    participant.substanceId.trim().length === 0 ||
+    !isBuilderParticipantRole(participant.role) ||
+    draft.participants.some((currentParticipant) => currentParticipant.id === participant.id)
+  ) {
+    return draft;
+  }
+
+  return {
+    ...draft,
+    participants: [...draft.participants, participant],
+  };
+}
+
+export function removeBuilderDraftParticipant(
+  draft: BuilderDraft,
+  participantId: string,
+): BuilderDraft {
+  const nextParticipants = draft.participants.filter(
+    (participant) => participant.id !== participantId,
+  );
+
+  if (nextParticipants.length === draft.participants.length) {
+    return draft;
+  }
+
+  return {
+    ...draft,
+    participants: nextParticipants,
+  };
+}
+
+export function updateBuilderDraftParticipantField(
+  draft: BuilderDraft,
+  participantId: string,
+  field: BuilderDraftParticipantField,
+  value: string,
+): BuilderDraft {
+  let updated = false;
+
+  const nextParticipants = draft.participants.map((participant) => {
+    if (participant.id !== participantId) {
+      return participant;
+    }
+
+    if (field === "role") {
+      if (!isBuilderParticipantRole(value)) {
+        return participant;
+      }
+
+      updated = true;
+      return {
+        ...participant,
+        role: value,
+      };
+    }
+
+    if (field === "substanceId") {
+      if (value.trim().length === 0) {
+        return participant;
+      }
+
+      updated = true;
+      return {
+        ...participant,
+        substanceId: value,
+      };
+    }
+
+    updated = true;
+    return {
+      ...participant,
+      stoichCoeffInput: value,
+    };
+  });
+
+  if (!updated) {
+    return draft;
+  }
+
+  return {
+    ...draft,
+    participants: nextParticipants,
+  };
+}
+
+export function serializeBuilderDraftForStorage(draft: BuilderDraft): string {
+  return JSON.stringify({
+    version: BUILDER_DRAFT_STORAGE_VERSION,
+    draft,
+  });
+}
+
+export function parseBuilderDraftFromStorage(storedValue: string | null): BuilderDraft | null {
+  if (storedValue === null) {
+    return null;
+  }
+
+  let parsedValue: unknown;
+  try {
+    parsedValue = JSON.parse(storedValue) as unknown;
+  } catch {
+    return null;
+  }
+
+  if (!isRecord(parsedValue)) {
+    return null;
+  }
+
+  if (parsedValue.version !== BUILDER_DRAFT_STORAGE_VERSION) {
+    return null;
+  }
+
+  return parseBuilderDraftValue(parsedValue.draft);
 }
 
 export function validateUserSubstanceDraft(
@@ -282,4 +419,94 @@ export function formatPresetComplexityLabel(value: string): string {
     .filter((token) => token.length > 0)
     .map((token) => `${token[0].toUpperCase()}${token.slice(1).toLowerCase()}`)
     .join(" ");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isReactionClass(value: string): value is ReactionClassV1 {
+  return Object.prototype.hasOwnProperty.call(REACTION_CLASS_LABEL_BY_VALUE, value);
+}
+
+function isBuilderParticipantRole(value: string): value is BuilderParticipantRole {
+  return BUILDER_PARTICIPANT_ROLES.includes(value as BuilderParticipantRole);
+}
+
+function parseBuilderDraftValue(value: unknown): BuilderDraft | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const { title, reactionClass, equation, description } = value;
+  if (
+    typeof title !== "string" ||
+    typeof reactionClass !== "string" ||
+    typeof equation !== "string" ||
+    typeof description !== "string" ||
+    !isReactionClass(reactionClass)
+  ) {
+    return null;
+  }
+
+  const rawParticipants = value.participants;
+  if (rawParticipants === undefined) {
+    return {
+      title,
+      reactionClass,
+      equation,
+      description,
+      participants: [],
+    };
+  }
+
+  if (!Array.isArray(rawParticipants)) {
+    return null;
+  }
+
+  const participants: BuilderDraftParticipant[] = [];
+  const participantIds = new Set<string>();
+  for (const rawParticipant of rawParticipants) {
+    const parsedParticipant = parseBuilderDraftParticipant(rawParticipant);
+    if (parsedParticipant === null || participantIds.has(parsedParticipant.id)) {
+      return null;
+    }
+
+    participantIds.add(parsedParticipant.id);
+    participants.push(parsedParticipant);
+  }
+
+  return {
+    title,
+    reactionClass,
+    equation,
+    description,
+    participants,
+  };
+}
+
+function parseBuilderDraftParticipant(value: unknown): BuilderDraftParticipant | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const { id, substanceId, role, stoichCoeffInput } = value;
+  if (
+    typeof id !== "string" ||
+    typeof substanceId !== "string" ||
+    typeof role !== "string" ||
+    typeof stoichCoeffInput !== "string" ||
+    id.trim().length === 0 ||
+    substanceId.trim().length === 0 ||
+    !isBuilderParticipantRole(role)
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+    substanceId,
+    role,
+    stoichCoeffInput,
+  };
 }

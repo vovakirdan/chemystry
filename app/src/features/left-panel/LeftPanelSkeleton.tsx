@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { PresetCatalogEntryV1, SubstanceCatalogEntryV1 } from "../../shared/contracts/ipc/v1";
 import {
+  BUILDER_PARTICIPANT_ROLES,
   LIBRARY_PHASE_FILTER_OPTIONS,
   LIBRARY_SOURCE_FILTER_OPTIONS,
   formatLibraryPhaseLabel,
@@ -10,6 +11,7 @@ import {
   isUserSubstanceEditable,
   type BuilderDraft,
   type BuilderDraftField,
+  type BuilderDraftParticipantField,
   type LeftPanelPlaceholderState,
   type LeftPanelTabId,
   type UserSubstanceDraft,
@@ -51,6 +53,15 @@ type LeftPanelLibraryViewModel = {
 type LeftPanelBuilderViewModel = {
   draft: BuilderDraft | null;
   onDraftFieldChange: (field: BuilderDraftField, value: string) => void;
+  allSubstances: ReadonlyArray<SubstanceCatalogEntryV1>;
+  onParticipantAdd: (substanceId: string) => void;
+  onParticipantFieldChange: (
+    participantId: string,
+    field: BuilderDraftParticipantField,
+    value: string,
+  ) => void;
+  onParticipantRemove: (participantId: string) => void;
+  onSaveDraft: () => void;
   copyFeedbackMessage: string | null;
   emptyMessage: string;
 };
@@ -155,6 +166,10 @@ function formatMolarMass(value: number | null): string {
   }
 
   return `${value.toFixed(5)} g/mol`;
+}
+
+function formatBuilderSubstanceOption(substance: SubstanceCatalogEntryV1): string {
+  return `${substance.name} (${substance.formula})`;
 }
 
 type SubstanceEditorFormModel = {
@@ -589,7 +604,7 @@ function renderBuilderView(
           </p>
         )}
 
-        <form className="left-panel-builder-form" data-testid="builder-form">
+        <div className="left-panel-builder-form" data-testid="builder-form">
           <label>
             Title
             <input
@@ -642,7 +657,162 @@ function renderBuilderView(
               rows={4}
             />
           </label>
-        </form>
+
+          <section
+            className="left-panel-builder-participants"
+            data-testid="builder-participants-section"
+          >
+            <h5 className="left-panel-library-form-title">Participants</h5>
+            {builderViewModel.draft.participants.length === 0 ? (
+              <p className="left-panel-placeholder-text" data-testid="builder-participant-empty">
+                Add reactants and products to build the reaction.
+              </p>
+            ) : (
+              <ul
+                className="left-panel-builder-participant-list"
+                data-testid="builder-participant-list"
+              >
+                {builderViewModel.draft.participants.map((participant) => {
+                  const hasKnownSubstance = builderViewModel.allSubstances.some(
+                    (substance) => substance.id === participant.substanceId,
+                  );
+
+                  return (
+                    <li
+                      key={participant.id}
+                      className="left-panel-builder-participant-item"
+                      data-testid={`builder-participant-item-${participant.id}`}
+                    >
+                      <label>
+                        Role
+                        <select
+                          value={participant.role}
+                          onChange={(event) =>
+                            builderViewModel.onParticipantFieldChange(
+                              participant.id,
+                              "role",
+                              event.currentTarget.value,
+                            )
+                          }
+                          data-testid={`builder-participant-role-${participant.id}`}
+                        >
+                          {BUILDER_PARTICIPANT_ROLES.map((role) => (
+                            <option key={role} value={role}>
+                              {role === "reactant" ? "Reactant" : "Product"}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label>
+                        Coeff
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={participant.stoichCoeffInput}
+                          onChange={(event) =>
+                            builderViewModel.onParticipantFieldChange(
+                              participant.id,
+                              "stoichCoeffInput",
+                              event.currentTarget.value,
+                            )
+                          }
+                          data-testid={`builder-participant-coeff-${participant.id}`}
+                        />
+                      </label>
+
+                      <label>
+                        Substance
+                        <select
+                          value={participant.substanceId}
+                          onChange={(event) =>
+                            builderViewModel.onParticipantFieldChange(
+                              participant.id,
+                              "substanceId",
+                              event.currentTarget.value,
+                            )
+                          }
+                          data-testid={`builder-participant-substance-${participant.id}`}
+                        >
+                          {!hasKnownSubstance && (
+                            <option value={participant.substanceId}>
+                              {`Unknown substance (${participant.substanceId})`}
+                            </option>
+                          )}
+                          {builderViewModel.allSubstances.map((substance) => (
+                            <option key={substance.id} value={substance.id}>
+                              {formatBuilderSubstanceOption(substance)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <button
+                        type="button"
+                        onClick={() => builderViewModel.onParticipantRemove(participant.id)}
+                        data-testid={`builder-participant-remove-${participant.id}`}
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            <form
+              className="left-panel-builder-participant-add-form"
+              data-testid="builder-participant-add-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const formData = new FormData(event.currentTarget);
+                const selectedSubstanceId = formData.get("builder-participant-add-substance-id");
+
+                if (
+                  typeof selectedSubstanceId === "string" &&
+                  selectedSubstanceId.trim().length > 0
+                ) {
+                  builderViewModel.onParticipantAdd(selectedSubstanceId);
+                }
+              }}
+            >
+              <label>
+                Substance
+                <select
+                  name="builder-participant-add-substance-id"
+                  data-testid="builder-participant-add-substance-select"
+                  defaultValue={builderViewModel.allSubstances[0]?.id ?? ""}
+                >
+                  {builderViewModel.allSubstances.length === 0 ? (
+                    <option value="">No substances available</option>
+                  ) : (
+                    builderViewModel.allSubstances.map((substance) => (
+                      <option key={substance.id} value={substance.id}>
+                        {formatBuilderSubstanceOption(substance)}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </label>
+
+              <button
+                type="submit"
+                data-testid="builder-participant-add-submit"
+                disabled={builderViewModel.allSubstances.length === 0}
+              >
+                Add participant
+              </button>
+            </form>
+          </section>
+
+          <button
+            type="button"
+            onClick={builderViewModel.onSaveDraft}
+            data-testid="builder-save-draft-button"
+          >
+            Save draft
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { PresetCatalogEntryV1, SubstanceCatalogEntryV1 } from "../../shared/contracts/ipc/v1";
 import {
+  addBuilderDraftParticipant,
   createBuilderDraftFromPreset,
   DEFAULT_USER_SUBSTANCE_DRAFT,
   LIBRARY_PHASE_FILTER_OPTIONS,
   LIBRARY_SOURCE_FILTER_OPTIONS,
+  parseBuilderDraftFromStorage,
+  removeBuilderDraftParticipant,
+  serializeBuilderDraftForStorage,
   createUserSubstanceDraftFromCatalogEntry,
   filterLibrarySubstances,
   formatPresetComplexityLabel,
@@ -14,6 +18,7 @@ import {
   resolveSelectedPresetId,
   resolveSelectedLibrarySubstanceId,
   updateBuilderDraftField,
+  updateBuilderDraftParticipantField,
   validateUserSubstanceDraft,
 } from "./model";
 
@@ -175,6 +180,7 @@ describe("left panel library model", () => {
       reactionClass: "redox",
       equation: "2H2 + O2 -> 2H2O",
       description: "Preset combustion template for hydrogen oxidation.",
+      participants: [],
     });
 
     draft.title = "Custom title";
@@ -195,6 +201,123 @@ describe("left panel library model", () => {
     });
 
     expect(updateBuilderDraftField(baseDraft, "reactionClass", "unknown_class")).toEqual(baseDraft);
+  });
+
+  it("adds, updates, and removes builder participants", () => {
+    const baseDraft = createBuilderDraftFromPreset(SAMPLE_PRESETS[1]);
+    const draftWithParticipant = addBuilderDraftParticipant(baseDraft, {
+      id: "participant-1",
+      substanceId: "builtin-substance-hydrogen",
+      role: "reactant",
+      stoichCoeffInput: "2",
+    });
+
+    expect(baseDraft.participants).toEqual([]);
+    expect(draftWithParticipant.participants).toEqual([
+      {
+        id: "participant-1",
+        substanceId: "builtin-substance-hydrogen",
+        role: "reactant",
+        stoichCoeffInput: "2",
+      },
+    ]);
+
+    const draftWithUpdates = updateBuilderDraftParticipantField(
+      updateBuilderDraftParticipantField(
+        updateBuilderDraftParticipantField(
+          draftWithParticipant,
+          "participant-1",
+          "role",
+          "product",
+        ),
+        "participant-1",
+        "substanceId",
+        "custom-substance-salt",
+      ),
+      "participant-1",
+      "stoichCoeffInput",
+      "3",
+    );
+
+    expect(draftWithUpdates.participants).toEqual([
+      {
+        id: "participant-1",
+        substanceId: "custom-substance-salt",
+        role: "product",
+        stoichCoeffInput: "3",
+      },
+    ]);
+
+    const draftAfterRemoval = removeBuilderDraftParticipant(draftWithUpdates, "participant-1");
+    expect(draftAfterRemoval.participants).toEqual([]);
+  });
+
+  it("ignores invalid participant operations", () => {
+    const baseDraft = createBuilderDraftFromPreset(SAMPLE_PRESETS[0]);
+    const unchangedAfterAdd = addBuilderDraftParticipant(baseDraft, {
+      id: "",
+      substanceId: "builtin-substance-water",
+      role: "reactant",
+      stoichCoeffInput: "1",
+    });
+    expect(unchangedAfterAdd).toEqual(baseDraft);
+
+    const draftWithParticipant = addBuilderDraftParticipant(baseDraft, {
+      id: "participant-2",
+      substanceId: "builtin-substance-water",
+      role: "reactant",
+      stoichCoeffInput: "1",
+    });
+    const unchangedAfterInvalidRole = updateBuilderDraftParticipantField(
+      draftWithParticipant,
+      "participant-2",
+      "role",
+      "unknown-role",
+    );
+    expect(unchangedAfterInvalidRole).toEqual(draftWithParticipant);
+  });
+
+  it("serializes and safely parses builder draft for local storage", () => {
+    const draft = addBuilderDraftParticipant(createBuilderDraftFromPreset(SAMPLE_PRESETS[0]), {
+      id: "participant-3",
+      substanceId: "builtin-substance-hydrogen",
+      role: "reactant",
+      stoichCoeffInput: "2",
+    });
+
+    const serialized = serializeBuilderDraftForStorage(draft);
+
+    expect(parseBuilderDraftFromStorage(serialized)).toEqual(draft);
+    expect(parseBuilderDraftFromStorage(null)).toBeNull();
+    expect(parseBuilderDraftFromStorage("not-json")).toBeNull();
+    expect(
+      parseBuilderDraftFromStorage(
+        JSON.stringify({
+          version: 1,
+          draft: {
+            title: "bad",
+            reactionClass: "redox",
+            equation: "a",
+            description: "b",
+            participants: [{ id: "", substanceId: "x", role: "reactant", stoichCoeffInput: "1" }],
+          },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      parseBuilderDraftFromStorage(
+        JSON.stringify({
+          version: 1,
+          draft: {
+            title: "bad-class",
+            reactionClass: "toString",
+            equation: "x",
+            description: "y",
+            participants: [],
+          },
+        }),
+      ),
+    ).toBeNull();
   });
 
   it("resolves selected preset id and formats metadata labels", () => {

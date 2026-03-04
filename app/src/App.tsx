@@ -7,11 +7,15 @@ import CenterPanelSkeleton, {
 } from "./features/center-panel/CenterPanelSkeleton";
 import LeftPanelSkeleton from "./features/left-panel/LeftPanelSkeleton";
 import {
+  addBuilderDraftParticipant,
   createBuilderDraftFromPreset,
   DEFAULT_LEFT_PANEL_TAB,
   DEFAULT_USER_SUBSTANCE_DRAFT,
   LIBRARY_PHASE_FILTER_OPTIONS,
   LIBRARY_SOURCE_FILTER_OPTIONS,
+  parseBuilderDraftFromStorage,
+  removeBuilderDraftParticipant,
+  serializeBuilderDraftForStorage,
   createUserSubstanceDraftFromCatalogEntry,
   filterLibrarySubstances,
   isUserSubstanceEditable,
@@ -19,9 +23,11 @@ import {
   resolveSelectedPresetId,
   resolveSelectedLibrarySubstanceId,
   updateBuilderDraftField,
+  updateBuilderDraftParticipantField,
   validateUserSubstanceDraft,
   type BuilderDraft,
   type BuilderDraftField,
+  type BuilderDraftParticipantField,
   type LeftPanelPlaceholderState,
   type LeftPanelTabId,
   type UserSubstanceDraft,
@@ -81,6 +87,7 @@ const FEATURE_KEYS: ReadonlyArray<FeatureFlagKey> = [
 ];
 
 const LEFT_PANEL_ACTIVE_TAB_STORAGE_KEY = "chemystery.leftPanel.activeTab.v1";
+const BUILDER_DRAFT_STORAGE_KEY = "chemystery.builder.draft.v1";
 
 const DEFAULT_CENTER_PANEL_STATE: Readonly<CenterPanelControlState> = {
   isPlaying: false,
@@ -119,6 +126,31 @@ function persistLeftPanelTab(tab: LeftPanelTabId): void {
     window.localStorage.setItem(LEFT_PANEL_ACTIVE_TAB_STORAGE_KEY, tab);
   } catch {
     // Ignore localStorage failures to keep the shell interactive.
+  }
+}
+
+function readStoredBuilderDraft(): BuilderDraft | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    return parseBuilderDraftFromStorage(window.localStorage.getItem(BUILDER_DRAFT_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+function persistBuilderDraft(draft: BuilderDraft): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    window.localStorage.setItem(BUILDER_DRAFT_STORAGE_KEY, serializeBuilderDraftForStorage(draft));
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -165,6 +197,14 @@ function createDefaultUserSubstanceDraft(): UserSubstanceDraft {
 
 function createBuilderCopyFeedbackMessage(presetTitle: string): string {
   return `You are editing copy of preset "${presetTitle}". Original preset remains unchanged.`;
+}
+
+function createBuilderParticipantId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `participant-${crypto.randomUUID()}`;
+  }
+
+  return `participant-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function updateUserSubstanceDraftField(
@@ -267,7 +307,7 @@ function App() {
     "loading",
   );
   const [presetsLoadError, setPresetsLoadError] = useState<string | null>(null);
-  const [builderDraft, setBuilderDraft] = useState<BuilderDraft | null>(null);
+  const [builderDraft, setBuilderDraft] = useState<BuilderDraft | null>(readStoredBuilderDraft);
   const [builderCopyFeedbackMessage, setBuilderCopyFeedbackMessage] = useState<string | null>(null);
   const [createSubstanceDraft, setCreateSubstanceDraft] = useState<UserSubstanceDraft>(
     createDefaultUserSubstanceDraft,
@@ -642,6 +682,58 @@ function App() {
     [],
   );
 
+  const handleBuilderParticipantAdd = useCallback((substanceId: string): void => {
+    setBuilderDraft((currentDraft) => {
+      if (currentDraft === null) {
+        return currentDraft;
+      }
+
+      return addBuilderDraftParticipant(currentDraft, {
+        id: createBuilderParticipantId(),
+        substanceId,
+        role: "reactant",
+        stoichCoeffInput: "1",
+      });
+    });
+  }, []);
+
+  const handleBuilderParticipantFieldChange = useCallback(
+    (participantId: string, field: BuilderDraftParticipantField, value: string): void => {
+      setBuilderDraft((currentDraft) => {
+        if (currentDraft === null) {
+          return currentDraft;
+        }
+
+        return updateBuilderDraftParticipantField(currentDraft, participantId, field, value);
+      });
+    },
+    [],
+  );
+
+  const handleBuilderParticipantRemove = useCallback((participantId: string): void => {
+    setBuilderDraft((currentDraft) => {
+      if (currentDraft === null) {
+        return currentDraft;
+      }
+
+      return removeBuilderDraftParticipant(currentDraft, participantId);
+    });
+  }, []);
+
+  const handleSaveBuilderDraft = useCallback((): void => {
+    if (builderDraft === null) {
+      enqueueNotification("warn", "Builder draft is empty. Nothing to save.");
+      return;
+    }
+
+    if (!persistBuilderDraft(builderDraft)) {
+      enqueueNotification("error", "Unable to save builder draft to local storage.");
+      return;
+    }
+
+    enqueueNotification("info", "Builder draft saved to local storage.");
+  }, [builderDraft, enqueueNotification]);
+
   const handleUsePresetInBuilder = useCallback(
     (presetId: string): void => {
       const preset = allPresets.find((candidate) => candidate.id === presetId);
@@ -865,6 +957,11 @@ function App() {
             builderViewModel={{
               draft: builderDraft,
               onDraftFieldChange: handleBuilderDraftFieldChange,
+              allSubstances,
+              onParticipantAdd: handleBuilderParticipantAdd,
+              onParticipantFieldChange: handleBuilderParticipantFieldChange,
+              onParticipantRemove: handleBuilderParticipantRemove,
+              onSaveDraft: handleSaveBuilderDraft,
               copyFeedbackMessage: builderCopyFeedbackMessage,
               emptyMessage: builderEmptyMessage,
             }}

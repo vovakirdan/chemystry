@@ -16,6 +16,7 @@ const DEFAULT_BUILDER_DRAFT: BuilderDraft = {
   reactionClass: "inorganic",
   equation: "",
   description: "",
+  participants: [],
 };
 
 function createLibraryViewModel(
@@ -54,6 +55,11 @@ function createBuilderViewModel(
   return {
     draft: DEFAULT_BUILDER_DRAFT,
     onDraftFieldChange: vi.fn(),
+    allSubstances: [],
+    onParticipantAdd: vi.fn(),
+    onParticipantFieldChange: vi.fn(),
+    onParticipantRemove: vi.fn(),
+    onSaveDraft: vi.fn(),
     copyFeedbackMessage: null,
     emptyMessage: "Select a preset and use it in Builder.",
     ...overrides,
@@ -267,6 +273,7 @@ describe("LeftPanelSkeleton presets and builder tabs", () => {
               reactionClass: "redox",
               equation: "2H2 + O2 -> 2H2O",
               description: "Editable copy.",
+              participants: [],
             },
             copyFeedbackMessage:
               'You are editing copy of preset "Hydrogen combustion". Original preset remains unchanged.',
@@ -284,6 +291,67 @@ describe("LeftPanelSkeleton presets and builder tabs", () => {
     expect(html).toContain('data-testid="builder-class-select"');
     expect(html).toContain('data-testid="builder-equation-input"');
     expect(html).toContain('data-testid="builder-description-input"');
+    expect(html).toContain('data-testid="builder-participant-add-form"');
+    expect(html).toContain('data-testid="builder-save-draft-button"');
     expect(html).not.toContain('data-testid="builder-title-input" disabled=""');
+  });
+
+  it("renders participant list controls with stable selectors for add/remove/edit", () => {
+    const html = renderToStaticMarkup(
+      <LeftPanelSkeleton
+        {...createLeftPanelProps({
+          activeTab: "builder",
+          placeholderStateByTab: {
+            library: "ready",
+            builder: "ready",
+            presets: "ready",
+          },
+          builderViewModel: createBuilderViewModel({
+            draft: {
+              title: "Water synthesis",
+              reactionClass: "inorganic",
+              equation: "2H2 + O2 -> 2H2O",
+              description: "Builder draft",
+              participants: [
+                {
+                  id: "participant-1",
+                  substanceId: "builtin-substance-hydrogen",
+                  role: "reactant",
+                  stoichCoeffInput: "2",
+                },
+              ],
+            },
+            allSubstances: [
+              {
+                id: "builtin-substance-hydrogen",
+                name: "Hydrogen",
+                formula: "H2",
+                phase: "gas",
+                source: "builtin",
+                molarMassGMol: 2.01588,
+              },
+              {
+                id: "builtin-substance-water",
+                name: "Water",
+                formula: "H2O",
+                phase: "liquid",
+                source: "builtin",
+                molarMassGMol: 18.01528,
+              },
+            ],
+          }),
+        })}
+      />,
+    );
+
+    expect(html).toContain('data-testid="builder-participant-list"');
+    expect(html).toContain('data-testid="builder-participant-item-participant-1"');
+    expect(html).toContain('data-testid="builder-participant-role-participant-1"');
+    expect(html).toContain('data-testid="builder-participant-coeff-participant-1"');
+    expect(html).toContain('data-testid="builder-participant-substance-participant-1"');
+    expect(html).toContain('data-testid="builder-participant-remove-participant-1"');
+    expect(html).toContain('data-testid="builder-participant-add-substance-select"');
+    expect(html).toContain('data-testid="builder-participant-add-submit"');
+    expect(html).toContain('data-testid="builder-save-draft-button"');
   });
 });
