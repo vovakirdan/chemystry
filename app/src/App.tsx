@@ -24,6 +24,7 @@ import {
   resolveSelectedLibrarySubstanceId,
   updateBuilderDraftField,
   updateBuilderDraftParticipantField,
+  validateBuilderDraftForLaunch,
   validateUserSubstanceDraft,
   type BuilderDraft,
   type BuilderDraftField,
@@ -129,13 +130,18 @@ function persistLeftPanelTab(tab: LeftPanelTabId): void {
   }
 }
 
-function readStoredBuilderDraft(): BuilderDraft | null {
+function readStoredBuilderDraft(
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): BuilderDraft | null {
   if (typeof window === "undefined") {
     return null;
   }
 
   try {
-    return parseBuilderDraftFromStorage(window.localStorage.getItem(BUILDER_DRAFT_STORAGE_KEY));
+    return parseBuilderDraftFromStorage(
+      window.localStorage.getItem(BUILDER_DRAFT_STORAGE_KEY),
+      substances,
+    );
   } catch {
     return null;
   }
@@ -205,6 +211,13 @@ function createBuilderParticipantId(): string {
   }
 
   return `participant-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function resolveBuilderParticipantPhase(
+  substanceId: string,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): SubstancePhaseV1 {
+  return substances.find((substance) => substance.id === substanceId)?.phase ?? "solid";
 }
 
 function updateUserSubstanceDraftField(
@@ -307,7 +320,7 @@ function App() {
     "loading",
   );
   const [presetsLoadError, setPresetsLoadError] = useState<string | null>(null);
-  const [builderDraft, setBuilderDraft] = useState<BuilderDraft | null>(readStoredBuilderDraft);
+  const [builderDraft, setBuilderDraft] = useState<BuilderDraft | null>(null);
   const [builderCopyFeedbackMessage, setBuilderCopyFeedbackMessage] = useState<string | null>(null);
   const [createSubstanceDraft, setCreateSubstanceDraft] = useState<UserSubstanceDraft>(
     createDefaultUserSubstanceDraft,
@@ -325,6 +338,7 @@ function App() {
   const [libraryMutationError, setLibraryMutationError] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<ReadonlyArray<AppNotification>>([]);
   const notificationIdRef = useRef(0);
+  const builderDraftHydratedRef = useRef(false);
   const previousSimulationStateRef = useRef<string | null>(null);
   const previousRuntimeSettingsRef = useRef<RightPanelRuntimeSettings | null>(null);
 
@@ -613,6 +627,24 @@ function App() {
     setSelectedPresetId(resolvedSelectedPresetId);
   }, [resolvedSelectedPresetId, selectedPresetId]);
 
+  useEffect(() => {
+    if (builderDraftHydratedRef.current) {
+      return;
+    }
+
+    if (libraryLoadState !== "ready") {
+      return;
+    }
+
+    if (builderDraft !== null) {
+      builderDraftHydratedRef.current = true;
+      return;
+    }
+
+    setBuilderDraft(readStoredBuilderDraft(allSubstances));
+    builderDraftHydratedRef.current = true;
+  }, [allSubstances, builderDraft, libraryLoadState]);
+
   const libraryPlaceholderState: LeftPanelPlaceholderState = useMemo(() => {
     if (libraryLoadState === "loading") {
       return "loading";
@@ -641,6 +673,15 @@ function App() {
     () => (builderDraft === null ? "empty" : "ready"),
     [builderDraft],
   );
+
+  const builderLaunchValidationErrors = useMemo(
+    () => (builderDraft === null ? [] : validateBuilderDraftForLaunch(builderDraft)),
+    [builderDraft],
+  );
+  const isBuilderLaunchBlocked = builderLaunchValidationErrors.length > 0;
+  const builderLaunchBlockedReason = isBuilderLaunchBlocked
+    ? (builderLaunchValidationErrors[0] ?? "Fix builder participant values.")
+    : null;
 
   const placeholderStateByTab: Readonly<Record<LeftPanelTabId, LeftPanelPlaceholderState>> =
     useMemo(
@@ -682,20 +723,27 @@ function App() {
     [],
   );
 
-  const handleBuilderParticipantAdd = useCallback((substanceId: string): void => {
-    setBuilderDraft((currentDraft) => {
-      if (currentDraft === null) {
-        return currentDraft;
-      }
+  const handleBuilderParticipantAdd = useCallback(
+    (substanceId: string): void => {
+      setBuilderDraft((currentDraft) => {
+        if (currentDraft === null) {
+          return currentDraft;
+        }
 
-      return addBuilderDraftParticipant(currentDraft, {
-        id: createBuilderParticipantId(),
-        substanceId,
-        role: "reactant",
-        stoichCoeffInput: "1",
+        return addBuilderDraftParticipant(currentDraft, {
+          id: createBuilderParticipantId(),
+          substanceId,
+          role: "reactant",
+          stoichCoeffInput: "1",
+          phase: resolveBuilderParticipantPhase(substanceId, allSubstances),
+          amountMolInput: "",
+          massGInput: "",
+          volumeLInput: "",
+        });
       });
-    });
-  }, []);
+    },
+    [allSubstances],
+  );
 
   const handleBuilderParticipantFieldChange = useCallback(
     (participantId: string, field: BuilderDraftParticipantField, value: string): void => {
@@ -704,10 +752,16 @@ function App() {
           return currentDraft;
         }
 
-        return updateBuilderDraftParticipantField(currentDraft, participantId, field, value);
+        return updateBuilderDraftParticipantField(
+          currentDraft,
+          participantId,
+          field,
+          value,
+          allSubstances,
+        );
       });
     },
-    [],
+    [allSubstances],
   );
 
   const handleBuilderParticipantRemove = useCallback((participantId: string): void => {
@@ -963,6 +1017,8 @@ function App() {
               onParticipantRemove: handleBuilderParticipantRemove,
               onSaveDraft: handleSaveBuilderDraft,
               copyFeedbackMessage: builderCopyFeedbackMessage,
+              launchBlocked: isBuilderLaunchBlocked,
+              launchBlockReasons: builderLaunchValidationErrors,
               emptyMessage: builderEmptyMessage,
             }}
             presetsViewModel={{
@@ -976,7 +1032,11 @@ function App() {
           />
         }
         centerPanel={
-          <CenterPanelSkeleton onSimulationControlsChange={handleSimulationControlsChange}>
+          <CenterPanelSkeleton
+            onSimulationControlsChange={handleSimulationControlsChange}
+            playBlocked={isBuilderLaunchBlocked}
+            playBlockedReason={builderLaunchBlockedReason}
+          >
             <header className="center-header">
               <h1>Welcome to Tauri + React</h1>
               <p>

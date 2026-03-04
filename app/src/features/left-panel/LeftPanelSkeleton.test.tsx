@@ -1,7 +1,8 @@
 import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { BuilderDraft, UserSubstanceDraft } from "./model";
+import CenterPanelSkeleton from "../center-panel/CenterPanelSkeleton";
+import type { BuilderDraft, BuilderDraftParticipant, UserSubstanceDraft } from "./model";
 import LeftPanelSkeleton from "./LeftPanelSkeleton";
 
 const DEFAULT_SUBSTANCE_DRAFT: UserSubstanceDraft = {
@@ -18,6 +19,22 @@ const DEFAULT_BUILDER_DRAFT: BuilderDraft = {
   description: "",
   participants: [],
 };
+
+function createBuilderParticipant(
+  overrides: Partial<BuilderDraftParticipant> = {},
+): BuilderDraftParticipant {
+  return {
+    id: "participant-1",
+    substanceId: "builtin-substance-hydrogen",
+    role: "reactant",
+    stoichCoeffInput: "2",
+    phase: "gas",
+    amountMolInput: "1",
+    massGInput: "2.01588",
+    volumeLInput: "22.4",
+    ...overrides,
+  };
+}
 
 function createLibraryViewModel(
   overrides: Partial<ComponentProps<typeof LeftPanelSkeleton>["libraryViewModel"]> = {},
@@ -61,6 +78,8 @@ function createBuilderViewModel(
     onParticipantRemove: vi.fn(),
     onSaveDraft: vi.fn(),
     copyFeedbackMessage: null,
+    launchBlocked: false,
+    launchBlockReasons: [],
     emptyMessage: "Select a preset and use it in Builder.",
     ...overrides,
   };
@@ -214,6 +233,26 @@ describe("LeftPanelSkeleton library tab", () => {
   });
 });
 
+describe("CenterPanelSkeleton launch blocking", () => {
+  it("disables Play and shows blocked reason when play is blocked", () => {
+    const html = renderToStaticMarkup(
+      <CenterPanelSkeleton
+        playBlocked
+        playBlockedReason={'Mass (g) for participant "participant-1" cannot be negative.'}
+      />,
+    );
+
+    expect(html).toContain('data-testid="center-control-play"');
+    expect(html).toContain('data-testid="center-control-play" disabled=""');
+    expect(html).toContain('data-testid="center-control-status"');
+    expect(html).toContain("Playback: blocked");
+    expect(html).toContain('data-testid="center-control-blocked-reason"');
+    expect(html).toContain(
+      "Play disabled: Mass (g) for participant &quot;participant-1&quot; cannot be negative.",
+    );
+  });
+});
+
 describe("LeftPanelSkeleton presets and builder tabs", () => {
   it("renders presets metadata with class, complexity, description, and use action", () => {
     const html = renderToStaticMarkup(
@@ -296,7 +335,7 @@ describe("LeftPanelSkeleton presets and builder tabs", () => {
     expect(html).not.toContain('data-testid="builder-title-input" disabled=""');
   });
 
-  it("renders participant list controls with stable selectors for add/remove/edit", () => {
+  it("renders participant list controls with stable selectors, units, and conversion hint", () => {
     const html = renderToStaticMarkup(
       <LeftPanelSkeleton
         {...createLeftPanelProps({
@@ -312,14 +351,7 @@ describe("LeftPanelSkeleton presets and builder tabs", () => {
               reactionClass: "inorganic",
               equation: "2H2 + O2 -> 2H2O",
               description: "Builder draft",
-              participants: [
-                {
-                  id: "participant-1",
-                  substanceId: "builtin-substance-hydrogen",
-                  role: "reactant",
-                  stoichCoeffInput: "2",
-                },
-              ],
+              participants: [createBuilderParticipant()],
             },
             allSubstances: [
               {
@@ -347,11 +379,52 @@ describe("LeftPanelSkeleton presets and builder tabs", () => {
     expect(html).toContain('data-testid="builder-participant-list"');
     expect(html).toContain('data-testid="builder-participant-item-participant-1"');
     expect(html).toContain('data-testid="builder-participant-role-participant-1"');
+    expect(html).toContain('data-testid="builder-participant-phase-participant-1"');
     expect(html).toContain('data-testid="builder-participant-coeff-participant-1"');
+    expect(html).toContain('data-testid="builder-participant-mol-participant-1"');
+    expect(html).toContain('data-testid="builder-participant-mass-participant-1"');
+    expect(html).toContain('data-testid="builder-participant-volume-participant-1"');
     expect(html).toContain('data-testid="builder-participant-substance-participant-1"');
     expect(html).toContain('data-testid="builder-participant-remove-participant-1"');
+    expect(html).toContain('data-testid="builder-participant-conversion-hint"');
+    expect(html).toContain("Amount (mol)");
+    expect(html).toContain("Mass (g)");
+    expect(html).toContain("Volume (L)");
     expect(html).toContain('data-testid="builder-participant-add-substance-select"');
     expect(html).toContain('data-testid="builder-participant-add-submit"');
     expect(html).toContain('data-testid="builder-save-draft-button"');
+  });
+
+  it("renders launch-blocked indicator when builder has validation errors", () => {
+    const html = renderToStaticMarkup(
+      <LeftPanelSkeleton
+        {...createLeftPanelProps({
+          activeTab: "builder",
+          placeholderStateByTab: {
+            library: "ready",
+            builder: "ready",
+            presets: "ready",
+          },
+          builderViewModel: createBuilderViewModel({
+            draft: {
+              title: "Blocked draft",
+              reactionClass: "inorganic",
+              equation: "",
+              description: "",
+              participants: [createBuilderParticipant()],
+            },
+            launchBlocked: true,
+            launchBlockReasons: ['Mass (g) for participant "participant-1" cannot be negative.'],
+          }),
+        })}
+      />,
+    );
+
+    expect(html).toContain('data-testid="builder-launch-blocked-banner"');
+    expect(html).toContain("Launch blocked: fix invalid participant values.");
+    expect(html).toContain('data-testid="builder-launch-blocked-errors"');
+    expect(html).toContain(
+      "Mass (g) for participant &quot;participant-1&quot; cannot be negative.",
+    );
   });
 });

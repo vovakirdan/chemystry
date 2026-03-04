@@ -51,10 +51,21 @@ export interface BuilderDraftParticipant {
   substanceId: string;
   role: BuilderParticipantRole;
   stoichCoeffInput: string;
+  phase: SubstancePhaseV1;
+  amountMolInput: string;
+  massGInput: string;
+  volumeLInput: string;
 }
 
 export type BuilderDraftField = "title" | "reactionClass" | "equation" | "description";
-export type BuilderDraftParticipantField = "substanceId" | "role" | "stoichCoeffInput";
+export type BuilderDraftParticipantField =
+  | "substanceId"
+  | "role"
+  | "stoichCoeffInput"
+  | "phase"
+  | "amountMolInput"
+  | "massGInput"
+  | "volumeLInput";
 
 export interface UserSubstanceFormInput {
   name: string;
@@ -165,6 +176,7 @@ export function addBuilderDraftParticipant(
     participant.id.trim().length === 0 ||
     participant.substanceId.trim().length === 0 ||
     !isBuilderParticipantRole(participant.role) ||
+    !isSubstancePhase(participant.phase) ||
     draft.participants.some((currentParticipant) => currentParticipant.id === participant.id)
   ) {
     return draft;
@@ -199,6 +211,7 @@ export function updateBuilderDraftParticipantField(
   participantId: string,
   field: BuilderDraftParticipantField,
   value: string,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1> = [],
 ): BuilderDraft {
   let updated = false;
 
@@ -206,6 +219,8 @@ export function updateBuilderDraftParticipantField(
     if (participant.id !== participantId) {
       return participant;
     }
+
+    let nextParticipant = participant;
 
     if (field === "role") {
       if (!isBuilderParticipantRole(value)) {
@@ -224,17 +239,61 @@ export function updateBuilderDraftParticipantField(
         return participant;
       }
 
+      const selectedSubstance = substances.find((substance) => substance.id === value);
+      nextParticipant = {
+        ...participant,
+        substanceId: value,
+        phase: selectedSubstance?.phase ?? participant.phase,
+      };
+      nextParticipant = applyMassMolConversion(nextParticipant, "substanceId", substances);
+      updated = true;
+      return nextParticipant;
+    }
+
+    if (field === "phase") {
+      if (!isSubstancePhase(value)) {
+        return participant;
+      }
+
       updated = true;
       return {
         ...participant,
-        substanceId: value,
+        phase: value,
       };
+    }
+
+    if (field === "stoichCoeffInput") {
+      updated = true;
+      return {
+        ...participant,
+        stoichCoeffInput: value,
+      };
+    }
+
+    if (field === "amountMolInput") {
+      nextParticipant = {
+        ...participant,
+        amountMolInput: value,
+      };
+      nextParticipant = applyMassMolConversion(nextParticipant, "amountMolInput", substances);
+      updated = true;
+      return nextParticipant;
+    }
+
+    if (field === "massGInput") {
+      nextParticipant = {
+        ...participant,
+        massGInput: value,
+      };
+      nextParticipant = applyMassMolConversion(nextParticipant, "massGInput", substances);
+      updated = true;
+      return nextParticipant;
     }
 
     updated = true;
     return {
       ...participant,
-      stoichCoeffInput: value,
+      volumeLInput: value,
     };
   });
 
@@ -255,7 +314,10 @@ export function serializeBuilderDraftForStorage(draft: BuilderDraft): string {
   });
 }
 
-export function parseBuilderDraftFromStorage(storedValue: string | null): BuilderDraft | null {
+export function parseBuilderDraftFromStorage(
+  storedValue: string | null,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1> = [],
+): BuilderDraft | null {
   if (storedValue === null) {
     return null;
   }
@@ -275,7 +337,44 @@ export function parseBuilderDraftFromStorage(storedValue: string | null): Builde
     return null;
   }
 
-  return parseBuilderDraftValue(parsedValue.draft);
+  return parseBuilderDraftValue(parsedValue.draft, substances);
+}
+
+export function validateBuilderDraftForLaunch(draft: BuilderDraft): ReadonlyArray<string> {
+  const errors: string[] = [];
+
+  for (const participant of draft.participants) {
+    if (!isSubstancePhase(participant.phase)) {
+      errors.push(`Participant "${participant.id}" has unsupported phase value.`);
+    }
+
+    pushBuilderParticipantNonNegativeFieldError(
+      errors,
+      participant.id,
+      "Stoich coeff",
+      participant.stoichCoeffInput,
+    );
+    pushBuilderParticipantNonNegativeFieldError(
+      errors,
+      participant.id,
+      "Amount (mol)",
+      participant.amountMolInput,
+    );
+    pushBuilderParticipantNonNegativeFieldError(
+      errors,
+      participant.id,
+      "Mass (g)",
+      participant.massGInput,
+    );
+    pushBuilderParticipantNonNegativeFieldError(
+      errors,
+      participant.id,
+      "Volume (L)",
+      participant.volumeLInput,
+    );
+  }
+
+  return errors;
 }
 
 export function validateUserSubstanceDraft(
@@ -433,7 +532,116 @@ function isBuilderParticipantRole(value: string): value is BuilderParticipantRol
   return BUILDER_PARTICIPANT_ROLES.includes(value as BuilderParticipantRole);
 }
 
-function parseBuilderDraftValue(value: unknown): BuilderDraft | null {
+function isSubstancePhase(value: string): value is SubstancePhaseV1 {
+  return LIBRARY_PHASE_FILTER_OPTIONS.includes(value as SubstancePhaseV1);
+}
+
+function parseSubstancePhase(value: unknown): SubstancePhaseV1 | null {
+  if (typeof value !== "string" || !isSubstancePhase(value)) {
+    return null;
+  }
+
+  return value;
+}
+
+function isOptionalInputString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+function parseNonNegativeInputNumber(value: string): number | null {
+  const normalizedValue = value.trim();
+  if (normalizedValue.length === 0) {
+    return null;
+  }
+
+  const parsedValue = Number(normalizedValue);
+  if (!Number.isFinite(parsedValue) || parsedValue < 0) {
+    return null;
+  }
+
+  return parsedValue;
+}
+
+function formatConvertedQuantity(value: number): string {
+  return String(Number(value.toFixed(8)));
+}
+
+function resolveParticipantMolarMassGMol(
+  participant: BuilderDraftParticipant,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): number | null {
+  const selectedSubstance =
+    substances.find((substance) => substance.id === participant.substanceId) ?? null;
+  if (selectedSubstance === null || selectedSubstance.molarMassGMol === null) {
+    return null;
+  }
+
+  if (selectedSubstance.molarMassGMol <= 0) {
+    return null;
+  }
+
+  return selectedSubstance.molarMassGMol;
+}
+
+function applyMassMolConversion(
+  participant: BuilderDraftParticipant,
+  sourceField: "substanceId" | "amountMolInput" | "massGInput",
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): BuilderDraftParticipant {
+  const molarMassGMol = resolveParticipantMolarMassGMol(participant, substances);
+  if (molarMassGMol === null) {
+    return participant;
+  }
+
+  if (sourceField === "amountMolInput" || sourceField === "substanceId") {
+    const amountMol = parseNonNegativeInputNumber(participant.amountMolInput);
+    if (amountMol !== null) {
+      return {
+        ...participant,
+        massGInput: formatConvertedQuantity(amountMol * molarMassGMol),
+      };
+    }
+  }
+
+  if (sourceField === "massGInput" || sourceField === "substanceId") {
+    const massG = parseNonNegativeInputNumber(participant.massGInput);
+    if (massG !== null) {
+      return {
+        ...participant,
+        amountMolInput: formatConvertedQuantity(massG / molarMassGMol),
+      };
+    }
+  }
+
+  return participant;
+}
+
+function pushBuilderParticipantNonNegativeFieldError(
+  errors: string[],
+  participantId: string,
+  fieldLabel: string,
+  value: string,
+): void {
+  const normalizedValue = value.trim();
+  if (normalizedValue.length === 0) {
+    return;
+  }
+
+  const parsedValue = Number(normalizedValue);
+  if (!Number.isFinite(parsedValue)) {
+    errors.push(`${fieldLabel} for participant "${participantId}" must be a number.`);
+    return;
+  }
+
+  if (parsedValue < 0) {
+    errors.push(`${fieldLabel} for participant "${participantId}" cannot be negative.`);
+  }
+}
+
+function parseBuilderDraftValue(
+  value: unknown,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): BuilderDraft | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -467,7 +675,7 @@ function parseBuilderDraftValue(value: unknown): BuilderDraft | null {
   const participants: BuilderDraftParticipant[] = [];
   const participantIds = new Set<string>();
   for (const rawParticipant of rawParticipants) {
-    const parsedParticipant = parseBuilderDraftParticipant(rawParticipant);
+    const parsedParticipant = parseBuilderDraftParticipant(rawParticipant, substances);
     if (parsedParticipant === null || participantIds.has(parsedParticipant.id)) {
       return null;
     }
@@ -485,12 +693,31 @@ function parseBuilderDraftValue(value: unknown): BuilderDraft | null {
   };
 }
 
-function parseBuilderDraftParticipant(value: unknown): BuilderDraftParticipant | null {
+function resolveLegacyParticipantPhase(
+  substanceId: string,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): SubstancePhaseV1 {
+  return substances.find((substance) => substance.id === substanceId)?.phase ?? "solid";
+}
+
+function parseBuilderDraftParticipant(
+  value: unknown,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): BuilderDraftParticipant | null {
   if (!isRecord(value)) {
     return null;
   }
 
-  const { id, substanceId, role, stoichCoeffInput } = value;
+  const {
+    id,
+    substanceId,
+    role,
+    stoichCoeffInput,
+    phase,
+    amountMolInput,
+    massGInput,
+    volumeLInput,
+  } = value;
   if (
     typeof id !== "string" ||
     typeof substanceId !== "string" ||
@@ -503,10 +730,30 @@ function parseBuilderDraftParticipant(value: unknown): BuilderDraftParticipant |
     return null;
   }
 
+  const parsedPhase =
+    phase === undefined
+      ? resolveLegacyParticipantPhase(substanceId, substances)
+      : parseSubstancePhase(phase);
+  if (parsedPhase === null) {
+    return null;
+  }
+
+  if (
+    !isOptionalInputString(amountMolInput) ||
+    !isOptionalInputString(massGInput) ||
+    !isOptionalInputString(volumeLInput)
+  ) {
+    return null;
+  }
+
   return {
     id,
     substanceId,
     role,
     stoichCoeffInput,
+    phase: parsedPhase,
+    amountMolInput: amountMolInput ?? "",
+    massGInput: massGInput ?? "",
+    volumeLInput: volumeLInput ?? "",
   };
 }

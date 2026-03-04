@@ -1,25 +1,31 @@
 import { describe, expect, it } from "vitest";
-import type { PresetCatalogEntryV1, SubstanceCatalogEntryV1 } from "../../shared/contracts/ipc/v1";
+import type {
+  PresetCatalogEntryV1,
+  SubstanceCatalogEntryV1,
+  SubstancePhaseV1,
+} from "../../shared/contracts/ipc/v1";
 import {
   addBuilderDraftParticipant,
   createBuilderDraftFromPreset,
-  DEFAULT_USER_SUBSTANCE_DRAFT,
-  LIBRARY_PHASE_FILTER_OPTIONS,
-  LIBRARY_SOURCE_FILTER_OPTIONS,
-  parseBuilderDraftFromStorage,
-  removeBuilderDraftParticipant,
-  serializeBuilderDraftForStorage,
   createUserSubstanceDraftFromCatalogEntry,
+  DEFAULT_USER_SUBSTANCE_DRAFT,
   filterLibrarySubstances,
   formatPresetComplexityLabel,
   formatReactionClassLabel,
   isUserSubstanceEditable,
+  LIBRARY_PHASE_FILTER_OPTIONS,
+  LIBRARY_SOURCE_FILTER_OPTIONS,
   normalizeLibrarySearchQuery,
-  resolveSelectedPresetId,
+  parseBuilderDraftFromStorage,
+  removeBuilderDraftParticipant,
   resolveSelectedLibrarySubstanceId,
+  resolveSelectedPresetId,
+  serializeBuilderDraftForStorage,
   updateBuilderDraftField,
   updateBuilderDraftParticipantField,
+  validateBuilderDraftForLaunch,
   validateUserSubstanceDraft,
+  type BuilderDraftParticipant,
 } from "./model";
 
 const SAMPLE_SUBSTANCES: ReadonlyArray<SubstanceCatalogEntryV1> = [
@@ -67,6 +73,23 @@ const SAMPLE_PRESETS: ReadonlyArray<PresetCatalogEntryV1> = [
     description: "Preset neutralization template for common aqueous media.",
   },
 ];
+
+function createParticipant(
+  id: string,
+  overrides: Partial<BuilderDraftParticipant> = {},
+): BuilderDraftParticipant {
+  return {
+    id,
+    substanceId: "builtin-substance-hydrogen",
+    role: "reactant",
+    stoichCoeffInput: "1",
+    phase: "gas",
+    amountMolInput: "",
+    massGInput: "",
+    volumeLInput: "",
+    ...overrides,
+  };
+}
 
 describe("left panel library model", () => {
   it("normalizes search query using trim and lowercase", () => {
@@ -203,40 +226,48 @@ describe("left panel library model", () => {
     expect(updateBuilderDraftField(baseDraft, "reactionClass", "unknown_class")).toEqual(baseDraft);
   });
 
-  it("adds, updates, and removes builder participants", () => {
+  it("adds, updates, and removes builder participants with new fields", () => {
     const baseDraft = createBuilderDraftFromPreset(SAMPLE_PRESETS[1]);
-    const draftWithParticipant = addBuilderDraftParticipant(baseDraft, {
-      id: "participant-1",
-      substanceId: "builtin-substance-hydrogen",
-      role: "reactant",
-      stoichCoeffInput: "2",
-    });
+    const draftWithParticipant = addBuilderDraftParticipant(
+      baseDraft,
+      createParticipant("participant-1"),
+    );
 
     expect(baseDraft.participants).toEqual([]);
-    expect(draftWithParticipant.participants).toEqual([
-      {
-        id: "participant-1",
-        substanceId: "builtin-substance-hydrogen",
-        role: "reactant",
-        stoichCoeffInput: "2",
-      },
-    ]);
+    expect(draftWithParticipant.participants).toEqual([createParticipant("participant-1")]);
 
     const draftWithUpdates = updateBuilderDraftParticipantField(
       updateBuilderDraftParticipantField(
         updateBuilderDraftParticipantField(
-          draftWithParticipant,
+          updateBuilderDraftParticipantField(
+            updateBuilderDraftParticipantField(
+              updateBuilderDraftParticipantField(
+                draftWithParticipant,
+                "participant-1",
+                "role",
+                "product",
+              ),
+              "participant-1",
+              "substanceId",
+              "custom-substance-salt",
+              SAMPLE_SUBSTANCES,
+            ),
+            "participant-1",
+            "phase",
+            "liquid",
+          ),
           "participant-1",
-          "role",
-          "product",
+          "stoichCoeffInput",
+          "3",
         ),
         "participant-1",
-        "substanceId",
-        "custom-substance-salt",
+        "amountMolInput",
+        "2",
+        SAMPLE_SUBSTANCES,
       ),
       "participant-1",
-      "stoichCoeffInput",
-      "3",
+      "volumeLInput",
+      "0.25",
     );
 
     expect(draftWithUpdates.participants).toEqual([
@@ -245,6 +276,10 @@ describe("left panel library model", () => {
         substanceId: "custom-substance-salt",
         role: "product",
         stoichCoeffInput: "3",
+        phase: "liquid",
+        amountMolInput: "2",
+        massGInput: "116.88554",
+        volumeLInput: "0.25",
       },
     ]);
 
@@ -252,38 +287,87 @@ describe("left panel library model", () => {
     expect(draftAfterRemoval.participants).toEqual([]);
   });
 
+  it("applies mass<->mol conversion using selected substance molar mass", () => {
+    const baseDraft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      createParticipant("participant-2"),
+    );
+
+    const amountUpdated = updateBuilderDraftParticipantField(
+      baseDraft,
+      "participant-2",
+      "amountMolInput",
+      "2",
+      SAMPLE_SUBSTANCES,
+    );
+    expect(amountUpdated.participants[0]).toMatchObject({
+      amountMolInput: "2",
+      massGInput: "4.03176",
+    });
+
+    const massUpdated = updateBuilderDraftParticipantField(
+      amountUpdated,
+      "participant-2",
+      "massGInput",
+      "10.0794",
+      SAMPLE_SUBSTANCES,
+    );
+    expect(massUpdated.participants[0]).toMatchObject({
+      amountMolInput: "5",
+      massGInput: "10.0794",
+    });
+
+    const invalidAmount = updateBuilderDraftParticipantField(
+      massUpdated,
+      "participant-2",
+      "amountMolInput",
+      "-1",
+      SAMPLE_SUBSTANCES,
+    );
+    expect(invalidAmount.participants[0]).toMatchObject({
+      amountMolInput: "-1",
+      massGInput: "10.0794",
+    });
+  });
+
   it("ignores invalid participant operations", () => {
     const baseDraft = createBuilderDraftFromPreset(SAMPLE_PRESETS[0]);
     const unchangedAfterAdd = addBuilderDraftParticipant(baseDraft, {
+      ...createParticipant("invalid"),
       id: "",
-      substanceId: "builtin-substance-water",
-      role: "reactant",
-      stoichCoeffInput: "1",
     });
     expect(unchangedAfterAdd).toEqual(baseDraft);
 
-    const draftWithParticipant = addBuilderDraftParticipant(baseDraft, {
-      id: "participant-2",
-      substanceId: "builtin-substance-water",
-      role: "reactant",
-      stoichCoeffInput: "1",
-    });
+    const draftWithParticipant = addBuilderDraftParticipant(
+      baseDraft,
+      createParticipant("participant-3"),
+    );
     const unchangedAfterInvalidRole = updateBuilderDraftParticipantField(
       draftWithParticipant,
-      "participant-2",
+      "participant-3",
       "role",
       "unknown-role",
     );
     expect(unchangedAfterInvalidRole).toEqual(draftWithParticipant);
+
+    const unchangedAfterInvalidPhase = updateBuilderDraftParticipantField(
+      draftWithParticipant,
+      "participant-3",
+      "phase",
+      "plasma",
+    );
+    expect(unchangedAfterInvalidPhase).toEqual(draftWithParticipant);
   });
 
   it("serializes and safely parses builder draft for local storage", () => {
-    const draft = addBuilderDraftParticipant(createBuilderDraftFromPreset(SAMPLE_PRESETS[0]), {
-      id: "participant-3",
-      substanceId: "builtin-substance-hydrogen",
-      role: "reactant",
-      stoichCoeffInput: "2",
-    });
+    const draft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      createParticipant("participant-4", {
+        amountMolInput: "1",
+        massGInput: "2.01588",
+        volumeLInput: "1",
+      }),
+    );
 
     const serialized = serializeBuilderDraftForStorage(draft);
 
@@ -299,7 +383,14 @@ describe("left panel library model", () => {
             reactionClass: "redox",
             equation: "a",
             description: "b",
-            participants: [{ id: "", substanceId: "x", role: "reactant", stoichCoeffInput: "1" }],
+            participants: [
+              {
+                id: "",
+                substanceId: "x",
+                role: "reactant",
+                stoichCoeffInput: "1",
+              },
+            ],
           },
         }),
       ),
@@ -318,6 +409,74 @@ describe("left panel library model", () => {
         }),
       ),
     ).toBeNull();
+  });
+
+  it("resolves legacy participant phase from matched substance when context is provided", () => {
+    const parsedDraft = parseBuilderDraftFromStorage(
+      JSON.stringify({
+        version: 1,
+        draft: {
+          title: "Legacy draft",
+          reactionClass: "redox",
+          equation: "2H2 + O2 -> 2H2O",
+          description: "Stored before participant amount fields existed.",
+          participants: [
+            {
+              id: "legacy-p1",
+              substanceId: "builtin-substance-hydrogen",
+              role: "reactant",
+              stoichCoeffInput: "2",
+            },
+          ],
+        },
+      }),
+      SAMPLE_SUBSTANCES,
+    );
+
+    expect(parsedDraft).toEqual({
+      title: "Legacy draft",
+      reactionClass: "redox",
+      equation: "2H2 + O2 -> 2H2O",
+      description: "Stored before participant amount fields existed.",
+      participants: [
+        {
+          id: "legacy-p1",
+          substanceId: "builtin-substance-hydrogen",
+          role: "reactant",
+          stoichCoeffInput: "2",
+          phase: "gas",
+          amountMolInput: "",
+          massGInput: "",
+          volumeLInput: "",
+        },
+      ],
+    });
+  });
+
+  it("blocks launch when participant numeric fields are negative", () => {
+    const participant = createParticipant("participant-negative", {
+      phase: "liquid" as SubstancePhaseV1,
+      stoichCoeffInput: "-2",
+      amountMolInput: "-0.5",
+      massGInput: "-3",
+      volumeLInput: "-1",
+    });
+    const draft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      participant,
+    );
+    const errors = validateBuilderDraftForLaunch(draft);
+
+    expect(errors).toContain(
+      'Stoich coeff for participant "participant-negative" cannot be negative.',
+    );
+    expect(errors).toContain(
+      'Amount (mol) for participant "participant-negative" cannot be negative.',
+    );
+    expect(errors).toContain('Mass (g) for participant "participant-negative" cannot be negative.');
+    expect(errors).toContain(
+      'Volume (L) for participant "participant-negative" cannot be negative.',
+    );
   });
 
   it("resolves selected preset id and formats metadata labels", () => {

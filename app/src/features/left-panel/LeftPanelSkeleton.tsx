@@ -63,6 +63,8 @@ type LeftPanelBuilderViewModel = {
   onParticipantRemove: (participantId: string) => void;
   onSaveDraft: () => void;
   copyFeedbackMessage: string | null;
+  launchBlocked: boolean;
+  launchBlockReasons: ReadonlyArray<string>;
   emptyMessage: string;
 };
 
@@ -604,6 +606,26 @@ function renderBuilderView(
           </p>
         )}
 
+        {builderViewModel.launchBlocked && (
+          <div
+            className="left-panel-builder-launch-blocked"
+            role="alert"
+            data-testid="builder-launch-blocked-banner"
+          >
+            Launch blocked: fix invalid participant values.
+            {builderViewModel.launchBlockReasons.length > 0 && (
+              <ul
+                className="left-panel-builder-launch-blocked-list"
+                data-testid="builder-launch-blocked-errors"
+              >
+                {builderViewModel.launchBlockReasons.map((reason, index) => (
+                  <li key={`builder-launch-blocked-reason-${index.toString()}`}>{reason}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         <div className="left-panel-builder-form" data-testid="builder-form">
           <label>
             Title
@@ -663,6 +685,12 @@ function renderBuilderView(
             data-testid="builder-participants-section"
           >
             <h5 className="left-panel-library-form-title">Participants</h5>
+            <p
+              className="left-panel-builder-participant-hint"
+              data-testid="builder-participant-conversion-hint"
+            >
+              Amount (mol) and Mass (g) auto-convert using selected substance molar mass.
+            </p>
             {builderViewModel.draft.participants.length === 0 ? (
               <p className="left-panel-placeholder-text" data-testid="builder-participant-empty">
                 Add reactants and products to build the reaction.
@@ -705,6 +733,27 @@ function renderBuilderView(
                       </label>
 
                       <label>
+                        Phase
+                        <select
+                          value={participant.phase}
+                          onChange={(event) =>
+                            builderViewModel.onParticipantFieldChange(
+                              participant.id,
+                              "phase",
+                              event.currentTarget.value,
+                            )
+                          }
+                          data-testid={`builder-participant-phase-${participant.id}`}
+                        >
+                          {LIBRARY_PHASE_FILTER_OPTIONS.map((phase) => (
+                            <option key={phase} value={phase}>
+                              {formatLibraryPhaseLabel(phase)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label>
                         Coeff
                         <input
                           type="text"
@@ -718,6 +767,57 @@ function renderBuilderView(
                             )
                           }
                           data-testid={`builder-participant-coeff-${participant.id}`}
+                        />
+                      </label>
+
+                      <label>
+                        Amount (mol)
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={participant.amountMolInput}
+                          onChange={(event) =>
+                            builderViewModel.onParticipantFieldChange(
+                              participant.id,
+                              "amountMolInput",
+                              event.currentTarget.value,
+                            )
+                          }
+                          data-testid={`builder-participant-mol-${participant.id}`}
+                        />
+                      </label>
+
+                      <label>
+                        Mass (g)
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={participant.massGInput}
+                          onChange={(event) =>
+                            builderViewModel.onParticipantFieldChange(
+                              participant.id,
+                              "massGInput",
+                              event.currentTarget.value,
+                            )
+                          }
+                          data-testid={`builder-participant-mass-${participant.id}`}
+                        />
+                      </label>
+
+                      <label>
+                        Volume (L)
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={participant.volumeLInput}
+                          onChange={(event) =>
+                            builderViewModel.onParticipantFieldChange(
+                              participant.id,
+                              "volumeLInput",
+                              event.currentTarget.value,
+                            )
+                          }
+                          data-testid={`builder-participant-volume-${participant.id}`}
                         />
                       </label>
 

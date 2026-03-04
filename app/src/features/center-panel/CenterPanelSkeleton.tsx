@@ -3,6 +3,8 @@ import { useEffect, useState, type ReactNode } from "react";
 type CenterPanelSkeletonProps = {
   children?: ReactNode;
   onSimulationControlsChange?: (state: CenterPanelControlState) => void;
+  playBlocked?: boolean;
+  playBlockedReason?: string | null;
 };
 
 const TIMELINE_MIN = 0;
@@ -15,16 +17,26 @@ export type CenterPanelControlState = {
   timelinePosition: number;
 };
 
-function CenterPanelSkeleton({ children, onSimulationControlsChange }: CenterPanelSkeletonProps) {
+function CenterPanelSkeleton({
+  children,
+  onSimulationControlsChange,
+  playBlocked = false,
+  playBlockedReason = null,
+}: CenterPanelSkeletonProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [timelinePosition, setTimelinePosition] = useState(CENTER_TIMELINE_INITIAL);
+  const effectiveIsPlaying = isPlaying && !playBlocked;
 
   useEffect(() => {
     onSimulationControlsChange?.({
-      isPlaying,
+      isPlaying: effectiveIsPlaying,
       timelinePosition,
     });
-  }, [isPlaying, onSimulationControlsChange, timelinePosition]);
+  }, [effectiveIsPlaying, onSimulationControlsChange, timelinePosition]);
+
+  const playDisabled = effectiveIsPlaying || playBlocked;
+  const playUnavailableHint =
+    playBlockedReason ?? "Play is blocked until Builder validation errors are fixed.";
 
   function resetControls(): void {
     setIsPlaying(false);
@@ -73,8 +85,15 @@ function CenterPanelSkeleton({ children, onSimulationControlsChange }: CenterPan
               type="button"
               aria-label="Play timeline"
               data-testid="center-control-play"
-              onClick={() => setIsPlaying(true)}
-              disabled={isPlaying}
+              onClick={() => {
+                if (playBlocked) {
+                  return;
+                }
+
+                setIsPlaying(true);
+              }}
+              disabled={playDisabled}
+              title={playBlocked ? playUnavailableHint : undefined}
             >
               Play
             </button>
@@ -121,8 +140,13 @@ function CenterPanelSkeleton({ children, onSimulationControlsChange }: CenterPan
         </div>
 
         <p className="status-line" aria-live="polite" data-testid="center-control-status">
-          Playback: {isPlaying ? "running" : "paused"}
+          Playback: {playBlocked ? "blocked" : effectiveIsPlaying ? "running" : "paused"}
         </p>
+        {playBlocked && (
+          <p className="status-line" aria-live="polite" data-testid="center-control-blocked-reason">
+            Play disabled: {playUnavailableHint}
+          </p>
+        )}
       </section>
 
       {children ? <div className="center-panel-content">{children}</div> : null}

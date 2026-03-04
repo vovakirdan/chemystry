@@ -674,6 +674,21 @@ button.left-panel-library-delete-button:hover {
   padding: 0.45rem 0.5rem;
 }
 
+.left-panel-builder-launch-blocked {
+  margin: 0 0 0.55rem;
+  border: 1px solid #e0b0ae;
+  border-radius: var(--radius-sm);
+  background: var(--color-error-soft);
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+  padding: 0.45rem 0.5rem;
+}
+
+.left-panel-builder-launch-blocked-list {
+  margin: 0.4rem 0 0;
+  padding-left: 1rem;
+}
+
 .left-panel-builder-form {
   display: flex;
   flex-direction: column;
@@ -703,6 +718,12 @@ button.left-panel-library-delete-button:hover {
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
+}
+
+.left-panel-builder-participant-hint {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
 }
 
 .left-panel-builder-participant-list {
