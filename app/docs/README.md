@@ -7,4 +7,5 @@
 - Feature flags (E02-T04): `feature-flags.md`
 - UI shell notes (E03): `ui-shell.md`
 - Storage migrations (E04-T01): `storage-migrations.md`
+- Schema dump (E04-T02): `schema-dump-e04-t02.sql`
 - ADR: `adr/0001-layer-boundaries-and-dependency-direction.md`

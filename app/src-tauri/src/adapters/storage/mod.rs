@@ -25,6 +25,45 @@ CREATE TABLE IF NOT EXISTS app_metadata (
 );
 "#;
 
+const MIGRATION_0002_CORE_CHEMICAL_DATA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS substance (
+    id TEXT PRIMARY KEY CHECK (length(id) > 0),
+    name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    formula TEXT NOT NULL CHECK (length(trim(formula)) > 0),
+    smiles TEXT CHECK (smiles IS NULL OR length(trim(smiles)) > 0),
+    molar_mass_g_mol REAL NOT NULL CHECK (molar_mass_g_mol > 0),
+    phase_default TEXT NOT NULL CHECK (phase_default IN ('solid', 'liquid', 'gas', 'aqueous')),
+    source_type TEXT NOT NULL CHECK (source_type IN ('builtin', 'imported', 'user_defined')),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(name, formula)
+);
+
+CREATE TABLE IF NOT EXISTS reaction_template (
+    id TEXT PRIMARY KEY CHECK (length(id) > 0),
+    title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+    reaction_class TEXT NOT NULL CHECK (reaction_class IN ('inorganic', 'acid_base', 'redox', 'organic_basic', 'equilibrium')),
+    equation_balanced TEXT NOT NULL CHECK (length(trim(equation_balanced)) > 0),
+    description TEXT NOT NULL CHECK (length(trim(description)) > 0),
+    is_preset INTEGER NOT NULL CHECK (is_preset IN (0, 1)),
+    version INTEGER NOT NULL CHECK (version > 0),
+    UNIQUE(title, version)
+);
+
+CREATE TABLE IF NOT EXISTS reaction_species (
+    id TEXT PRIMARY KEY CHECK (length(id) > 0),
+    reaction_template_id TEXT NOT NULL,
+    substance_id TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('reactant', 'product', 'catalyst', 'inert')),
+    stoich_coeff REAL NOT NULL CHECK (stoich_coeff > 0),
+    FOREIGN KEY (reaction_template_id) REFERENCES reaction_template(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    FOREIGN KEY (substance_id) REFERENCES substance(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+    UNIQUE(reaction_template_id, substance_id, role)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reaction_species_substance_id
+    ON reaction_species(substance_id);
+"#;
+
 #[derive(Debug, Clone, Copy)]
 struct Migration {
     version: i64,
@@ -32,11 +71,18 @@ struct Migration {
     sql: &'static str,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "0001_init_storage_metadata",
-    sql: MIGRATION_0001_INIT_STORAGE_SQL,
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "0001_init_storage_metadata",
+        sql: MIGRATION_0001_INIT_STORAGE_SQL,
+    },
+    Migration {
+        version: 2,
+        name: "0002_create_core_chemical_data",
+        sql: MIGRATION_0002_CORE_CHEMICAL_DATA_SQL,
+    },
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrationReport {
@@ -375,7 +421,7 @@ THIS IS NOT VALID SQL;
         let database_path = temp_dir.path().join("nested").join("clean.sqlite3");
 
         let first_run = run_migrations(&database_path).expect("migrations should succeed");
-        assert_eq!(first_run.applied_versions, vec![1]);
+        assert_eq!(first_run.applied_versions, vec![1, 2]);
 
         assert!(
             table_exists(&database_path, "schema_migrations"),
@@ -385,11 +431,153 @@ THIS IS NOT VALID SQL;
             table_exists(&database_path, "app_metadata"),
             "initial migration table should exist"
         );
+        assert!(
+            table_exists(&database_path, "substance"),
+            "substance table should exist"
+        );
+        assert!(
+            table_exists(&database_path, "reaction_template"),
+            "reaction_template table should exist"
+        );
+        assert!(
+            table_exists(&database_path, "reaction_species"),
+            "reaction_species table should exist"
+        );
 
         let second_run = run_migrations(&database_path).expect("rerun should be safe");
         assert!(
             second_run.applied_versions.is_empty(),
             "no migration should re-apply"
+        );
+    }
+
+    #[test]
+    fn enforces_core_entity_integrity_constraints() {
+        let temp_dir = TempDir::new().expect("must create temporary directory");
+        let database_path = temp_dir.path().join("constraints.sqlite3");
+
+        run_migrations(&database_path).expect("migrations should succeed");
+        let connection = open_connection(&database_path).expect("must open migrated database");
+
+        connection
+            .execute(
+                "INSERT INTO substance(
+                    id, name, formula, smiles, molar_mass_g_mol, phase_default, source_type
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    "e70ee765-cc3b-4f90-9f7f-ab8897be2a36",
+                    "Hydrogen",
+                    "H2",
+                    Option::<String>::None,
+                    2.016_f64,
+                    "gas",
+                    "builtin"
+                ],
+            )
+            .expect("valid substance row should insert");
+
+        connection
+            .execute(
+                "INSERT INTO reaction_template(
+                    id, title, reaction_class, equation_balanced, description, is_preset, version
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    "3eba79d3-2f03-43b4-b1a8-8576f7983b8c",
+                    "Hydrogen oxidation",
+                    "redox",
+                    "2H2 + O2 -> 2H2O",
+                    "Combustion template",
+                    1_i64,
+                    1_i64
+                ],
+            )
+            .expect("valid reaction template should insert");
+
+        connection
+            .execute(
+                "INSERT INTO reaction_species(
+                    id, reaction_template_id, substance_id, role, stoich_coeff
+                ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    "7136b76b-4929-4ec5-a056-9bc2a4ce5f0b",
+                    "3eba79d3-2f03-43b4-b1a8-8576f7983b8c",
+                    "e70ee765-cc3b-4f90-9f7f-ab8897be2a36",
+                    "reactant",
+                    2.0_f64
+                ],
+            )
+            .expect("valid reaction species should insert");
+
+        let duplicate_substance_result = connection.execute(
+            "INSERT INTO substance(
+                id, name, formula, smiles, molar_mass_g_mol, phase_default, source_type
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                "d98f59e5-36d8-4c88-8f57-c59d4219f1fd",
+                "Hydrogen",
+                "H2",
+                Option::<String>::None,
+                2.016_f64,
+                "gas",
+                "imported"
+            ],
+        );
+        assert!(
+            duplicate_substance_result.is_err(),
+            "duplicate (name, formula) must violate unique constraint"
+        );
+
+        let invalid_phase_result = connection.execute(
+            "INSERT INTO substance(
+                id, name, formula, smiles, molar_mass_g_mol, phase_default, source_type
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                "0b3967f1-b203-450b-835f-f1e1b252afba",
+                "Sodium chloride",
+                "NaCl",
+                Option::<String>::None,
+                58.44_f64,
+                "plasma",
+                "user_defined"
+            ],
+        );
+        assert!(
+            invalid_phase_result.is_err(),
+            "phase_default check constraint must reject unknown enum values"
+        );
+
+        let missing_template_result = connection.execute(
+            "INSERT INTO reaction_species(
+                id, reaction_template_id, substance_id, role, stoich_coeff
+            ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                "6aaf8d8c-5f0d-425f-b58b-2b10575ce8c2",
+                "d66ff8e3-c5f1-4297-a711-f7f0297eaf3f",
+                "e70ee765-cc3b-4f90-9f7f-ab8897be2a36",
+                "product",
+                1.0_f64
+            ],
+        );
+        assert!(
+            missing_template_result.is_err(),
+            "foreign key must reject unknown reaction_template_id"
+        );
+
+        let invalid_stoich_result = connection.execute(
+            "INSERT INTO reaction_species(
+                id, reaction_template_id, substance_id, role, stoich_coeff
+            ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                "ac530a72-fae2-4df2-a298-8b021fef7ab1",
+                "3eba79d3-2f03-43b4-b1a8-8576f7983b8c",
+                "e70ee765-cc3b-4f90-9f7f-ab8897be2a36",
+                "product",
+                0.0_f64
+            ],
+        );
+        assert!(
+            invalid_stoich_result.is_err(),
+            "stoich_coeff check constraint must reject non-positive values"
         );
     }
 

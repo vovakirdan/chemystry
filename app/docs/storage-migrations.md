@@ -15,6 +15,12 @@
 - The runner acquires an exclusive cross-process lock file (`*.migration.lock`) so only one app instance can migrate at a time.
 - Pending migrations execute automatically before IPC handlers are used.
 
+## Implemented Versions
+
+- `0001_init_storage_metadata`: creates `app_metadata`.
+- `0002_create_core_chemical_data`: creates `substance`, `reaction_template`, `reaction_species` with FK/unique/check constraints.
+- Review artifact: `schema-dump-e04-t02.sql`.
+
 ## Failure Recovery
 
 - Each migration executes inside a SQLite transaction and is recorded in `schema_migrations` only on commit.
