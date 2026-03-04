@@ -70,6 +70,10 @@ import {
   type AppNotification,
   type NotificationLevel,
 } from "./shared/lib/notifications";
+import {
+  calculateStoichiometry,
+  type StoichiometryCalculationResult,
+} from "./shared/lib/stoichiometry";
 import { parseNormalizedNumberInput } from "./shared/lib/units";
 import "./App.css";
 
@@ -181,6 +185,10 @@ type SimulationLifecycleCommandResult = {
   builderDraft: BuilderDraft | null;
   runtimeSettingsChanged: boolean;
   builderDraftChanged: boolean;
+};
+
+type AppProps = {
+  initialBuilderDraft?: BuilderDraft | null;
 };
 
 function createBuilderParticipantLabelLookup(
@@ -398,6 +406,33 @@ function collectBuilderValidationWarnings(
   }
 
   return warnings;
+}
+
+function buildStoichiometryResult(
+  draft: BuilderDraft | null,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): StoichiometryCalculationResult {
+  if (draft === null) {
+    return calculateStoichiometry({
+      participants: [],
+    });
+  }
+
+  const labelsByParticipantId = createBuilderParticipantLabelLookup(draft, substances);
+
+  return calculateStoichiometry({
+    participants: draft.participants.map((participant, participantIndex) => ({
+      id: participant.id,
+      label: resolveBuilderParticipantLabel(
+        participant.id,
+        participantIndex,
+        labelsByParticipantId,
+      ),
+      role: participant.role,
+      stoichCoeffInput: participant.stoichCoeffInput,
+      amountMolInput: participant.amountMolInput,
+    })),
+  });
 }
 
 function collectEnvironmentValidationErrors(
@@ -1070,7 +1105,7 @@ function sortScenariosByUpdatedAt(
   });
 }
 
-function App() {
+function App({ initialBuilderDraft = null }: AppProps) {
   const [activeLeftPanelTab, setActiveLeftPanelTab] =
     useState<LeftPanelTabId>(readStoredLeftPanelTab);
   const [healthMsg, setHealthMsg] = useState("Checking backend health...");
@@ -1102,7 +1137,7 @@ function App() {
     "loading",
   );
   const [presetsLoadError, setPresetsLoadError] = useState<string | null>(null);
-  const [builderDraft, setBuilderDraft] = useState<BuilderDraft | null>(null);
+  const [builderDraft, setBuilderDraft] = useState<BuilderDraft | null>(initialBuilderDraft);
   const [builderCopyFeedbackMessage, setBuilderCopyFeedbackMessage] = useState<string | null>(null);
   const [savedScenarios, setSavedScenarios] = useState<ReadonlyArray<ScenarioSummaryV1>>([]);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
@@ -1488,6 +1523,10 @@ function App() {
   const launchValidationModel = useMemo(
     () => buildLaunchValidationModel(builderDraft, runtimeSettings, allSubstances),
     [allSubstances, builderDraft, runtimeSettings],
+  );
+  const stoichiometryResult = useMemo(
+    () => buildStoichiometryResult(builderDraft, allSubstances),
+    [allSubstances, builderDraft],
   );
 
   const builderLaunchValidationErrors =
@@ -2165,6 +2204,7 @@ function App() {
             featureStatuses={rightPanelFeatureStatuses}
             runtimeSettings={runtimeSettings}
             onRuntimeSettingsChange={handleRuntimeSettingsChange}
+            stoichiometryResult={stoichiometryResult}
           />
         }
       />

@@ -1035,6 +1035,26 @@ button.right-panel-tab[aria-selected="true"] {
   gap: 0.55rem;
 }
 
+.right-panel-summary-block {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  padding: 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.right-panel-summary-block--ready {
+  border-color: #b4d0b9;
+  background: #f0fbf2;
+}
+
+.right-panel-summary-block--error {
+  border-color: #e0b0ae;
+  background: var(--color-error-soft);
+}
+
 .right-panel-field label {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);

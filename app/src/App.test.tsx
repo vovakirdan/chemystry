@@ -134,6 +134,27 @@ describe("App pre-run validation", () => {
     expect(html).toContain('data-testid="center-control-play" disabled=""');
   });
 
+  it("shows stoichiometry calculation error state in right-panel summary for missing builder data", () => {
+    const html = renderToStaticMarkup(<App />);
+
+    expect(html).toContain('data-testid="right-panel-summary-stoichiometry-error"');
+    expect(html).toContain("Stoichiometry is blocked until required Builder inputs are complete.");
+    expect(html).toContain(
+      "Add participants in Builder to calculate stoichiometry and limiting reactant.",
+    );
+  });
+
+  it("renders stoichiometry success summary in App when builder has valid participants", () => {
+    const html = renderToStaticMarkup(<App initialBuilderDraft={createValidBuilderDraft()} />);
+
+    expect(html).toContain('data-testid="right-panel-summary-stoichiometry-limiting"');
+    expect(html).toContain("Limiting reactant:");
+    expect(html).toContain('data-testid="right-panel-summary-stoichiometry-products"');
+    expect(html).not.toContain(
+      "Stoichiometry is blocked until required Builder inputs are complete.",
+    );
+  });
+
   it("keeps validation text user-friendly and actionable", () => {
     const html = renderToStaticMarkup(<App />);
 

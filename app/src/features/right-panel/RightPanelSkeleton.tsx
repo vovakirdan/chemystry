@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_RIGHT_PANEL_SECTION, type RightPanelSectionId } from "./model";
+import {
+  formatStoichiometryValue,
+  type StoichiometryCalculationResult,
+} from "../../shared/lib/stoichiometry";
 
 export type RightPanelFeatureStatus = {
   id: string;
@@ -12,6 +16,7 @@ type RightPanelSkeletonProps = {
   featureStatuses: ReadonlyArray<RightPanelFeatureStatus>;
   runtimeSettings?: RightPanelRuntimeSettings;
   onRuntimeSettingsChange?: (state: RightPanelRuntimeSettings) => void;
+  stoichiometryResult?: StoichiometryCalculationResult;
 };
 
 type RightPanelSectionDefinition = {
@@ -90,6 +95,7 @@ function RightPanelSkeleton({
   featureStatuses,
   runtimeSettings,
   onRuntimeSettingsChange,
+  stoichiometryResult,
 }: RightPanelSkeletonProps) {
   const [activeSection, setActiveSection] = useState<RightPanelSectionId>(
     DEFAULT_RIGHT_PANEL_SECTION,
@@ -349,6 +355,106 @@ function RightPanelSkeleton({
                     </li>
                   ))}
                 </ul>
+
+                {stoichiometryResult === undefined ? null : (
+                  <section
+                    className={`right-panel-summary-block ${
+                      stoichiometryResult.ok
+                        ? "right-panel-summary-block--ready"
+                        : "right-panel-summary-block--error"
+                    }`}
+                    aria-label="Stoichiometry summary"
+                    data-testid="right-panel-summary-stoichiometry"
+                  >
+                    <h4 className="panel-subtitle">Stoichiometry (MVP)</h4>
+                    {stoichiometryResult.ok ? (
+                      <>
+                        <p
+                          className="status-line"
+                          data-testid="right-panel-summary-stoichiometry-limiting"
+                        >
+                          Limiting reactant:{" "}
+                          {stoichiometryResult.limitingReactants
+                            .map((reactant) => reactant.label)
+                            .join(", ")}
+                        </p>
+                        <p
+                          className="status-line"
+                          data-testid="right-panel-summary-stoichiometry-extent"
+                        >
+                          Reaction extent:{" "}
+                          {formatStoichiometryValue(stoichiometryResult.reactionExtentMol)}{" "}
+                          {stoichiometryResult.units.reactionExtent}
+                        </p>
+
+                        <p className="status-line">Theoretical product amounts:</p>
+                        <ul
+                          className="status-list"
+                          data-testid="right-panel-summary-stoichiometry-products"
+                        >
+                          {stoichiometryResult.participants
+                            .filter((participant) => participant.role === "product")
+                            .map((participant) => (
+                              <li key={participant.id}>
+                                {participant.label}:{" "}
+                                {formatStoichiometryValue(participant.theoreticalAmountMol)}{" "}
+                                {stoichiometryResult.units.amount}
+                              </li>
+                            ))}
+                        </ul>
+
+                        <p className="status-line">Reactant amounts after full conversion:</p>
+                        <ul
+                          className="status-list"
+                          data-testid="right-panel-summary-stoichiometry-reactants"
+                        >
+                          {stoichiometryResult.participants
+                            .filter((participant) => participant.role === "reactant")
+                            .map((participant) => (
+                              <li key={participant.id}>
+                                {participant.label}: remaining{" "}
+                                {formatStoichiometryValue(participant.remainingAmountMol ?? 0)}{" "}
+                                {stoichiometryResult.units.amount}
+                              </li>
+                            ))}
+                        </ul>
+                      </>
+                    ) : (
+                      <>
+                        <p
+                          className="status-line"
+                          data-testid="right-panel-summary-stoichiometry-error"
+                        >
+                          Stoichiometry is blocked until required Builder inputs are complete.
+                        </p>
+                        <ul
+                          className="status-list"
+                          data-testid="right-panel-summary-stoichiometry-errors"
+                        >
+                          {stoichiometryResult.errors.map((error, index) => (
+                            <li key={`${error.code}-${index.toString()}`}>{error.message}</li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+
+                    <p
+                      className="status-line"
+                      data-testid="right-panel-summary-stoichiometry-units"
+                    >
+                      Units: amounts and reaction extent in {stoichiometryResult.units.amount};
+                      coefficients as {stoichiometryResult.units.coefficient}.
+                    </p>
+                    <ul
+                      className="status-list"
+                      data-testid="right-panel-summary-stoichiometry-assumptions"
+                    >
+                      {stoichiometryResult.assumptions.map((assumption, index) => (
+                        <li key={`stoichiometry-assumption-${index.toString()}`}>{assumption}</li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
 
                 <h4 className="panel-subtitle">Panel shortcuts</h4>
                 <ul className="kbd-list" aria-label="Panel keyboard shortcuts">
