@@ -6,6 +6,7 @@ This template should help get you started developing with Tauri, React and Types
 
 - Use **npm** (this repo tracks `package-lock.json`).
 - Setup guide: `docs/setup.md`
+- Project initialization proof (E01-T02): `docs/project-init.md`
 - Quick check: `bash scripts/check-env.sh`
 
 ## Recommended IDE Setup
