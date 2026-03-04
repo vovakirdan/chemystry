@@ -8,6 +8,12 @@ use fs2::FileExt;
 use rusqlite::{params, Connection};
 use tauri::{AppHandle, Manager, Runtime};
 
+mod repository;
+pub use repository::{
+    NewReactionTemplate, NewScenarioRun, NewSubstance, ReactionTemplate, ScenarioRun, SeedReport,
+    StorageRepository, Substance, UpdateReactionTemplate, UpdateScenarioRun, UpdateSubstance,
+};
+
 const STORAGE_DIRECTORY_NAME: &str = "storage";
 const DATABASE_FILE_NAME: &str = "chemystry.sqlite3";
 const SCHEMA_MIGRATIONS_TABLE_SQL: &str = r#"
@@ -180,6 +186,10 @@ pub struct MigrationReport {
 pub enum StorageError {
     AppDataPathResolution(String),
     InvalidDatabasePath(PathBuf),
+    InvalidBackupFormat {
+        path: PathBuf,
+        message: String,
+    },
     Io {
         context: &'static str,
         path: PathBuf,
@@ -191,6 +201,8 @@ pub enum StorageError {
         message: String,
     },
     InvalidMigrationPlan(String),
+    DataInvariant(String),
+    AsyncTaskJoin(String),
     MigrationFailed {
         version: i64,
         name: &'static str,
@@ -212,6 +224,13 @@ impl Display for StorageError {
                     path.display()
                 )
             }
+            Self::InvalidBackupFormat { path, message } => {
+                write!(
+                    f,
+                    "invalid sqlite backup format at {}: {message}",
+                    path.display()
+                )
+            }
             Self::Io {
                 context,
                 path,
@@ -223,6 +242,8 @@ impl Display for StorageError {
                 message,
             } => write!(f, "{context} at {}: {message}", path.display()),
             Self::InvalidMigrationPlan(message) => write!(f, "{message}"),
+            Self::DataInvariant(message) => write!(f, "{message}"),
+            Self::AsyncTaskJoin(message) => write!(f, "background storage task failed: {message}"),
             Self::MigrationFailed {
                 version,
                 name,
@@ -245,6 +266,8 @@ impl Error for StorageError {}
 pub fn bootstrap_storage<R: Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf, StorageError> {
     let database_path = resolve_database_path(app_handle)?;
     run_migrations(&database_path)?;
+    let repository = StorageRepository::new(database_path.clone());
+    repository.seed_baseline_data()?;
     Ok(database_path)
 }
 

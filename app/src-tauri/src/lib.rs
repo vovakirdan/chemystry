@@ -7,7 +7,7 @@ pub mod infra {
 #[path = "adapters/ipc/v1.rs"]
 mod ipc_v1;
 #[path = "adapters/storage/mod.rs"]
-mod storage;
+pub mod storage;
 
 // Legacy command kept for demo compatibility while `greet_v1` is introduced.
 #[tauri::command]
