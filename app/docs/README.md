@@ -10,6 +10,7 @@
 - Substance catalog (E05-T01): `substance-catalog-e05-t01.md`
 - Substance CRUD (E05-T02): `substance-crud-e05-t02.md`
 - Presets library and Builder copy (E05-T03): `presets-builder-e05-t03.md`
+- Preset package coverage (E05-T04): `preset-package-e05-t04.md`
 - Schema dump (E04-T02): `schema-dump-e04-t02.sql`
 - Schema dump (E04-T03): `schema-dump-e04-t03.sql`
 - Storage JSON fields (E04-T03): `storage-json-fields-e04-t03.md`

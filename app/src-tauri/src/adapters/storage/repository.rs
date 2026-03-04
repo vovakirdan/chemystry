@@ -830,6 +830,60 @@ const BASELINE_SUBSTANCES: &[BaselineSubstanceSeed] = &[
         phase_default: "aqueous",
         source_type: "builtin",
     },
+    BaselineSubstanceSeed {
+        id: "builtin-substance-magnesium",
+        name: "Magnesium",
+        formula: "Mg",
+        smiles: None,
+        molar_mass_g_mol: 24.305,
+        phase_default: "solid",
+        source_type: "builtin",
+    },
+    BaselineSubstanceSeed {
+        id: "builtin-substance-magnesium-oxide",
+        name: "Magnesium oxide",
+        formula: "MgO",
+        smiles: None,
+        molar_mass_g_mol: 40.3044,
+        phase_default: "solid",
+        source_type: "builtin",
+    },
+    BaselineSubstanceSeed {
+        id: "builtin-substance-ethene",
+        name: "Ethene",
+        formula: "C2H4",
+        smiles: Some("C=C"),
+        molar_mass_g_mol: 28.05316,
+        phase_default: "gas",
+        source_type: "builtin",
+    },
+    BaselineSubstanceSeed {
+        id: "builtin-substance-ethanol",
+        name: "Ethanol",
+        formula: "C2H6O",
+        smiles: Some("CCO"),
+        molar_mass_g_mol: 46.06844,
+        phase_default: "liquid",
+        source_type: "builtin",
+    },
+    BaselineSubstanceSeed {
+        id: "builtin-substance-nitrogen",
+        name: "Nitrogen",
+        formula: "N2",
+        smiles: None,
+        molar_mass_g_mol: 28.0134,
+        phase_default: "gas",
+        source_type: "builtin",
+    },
+    BaselineSubstanceSeed {
+        id: "builtin-substance-ammonia",
+        name: "Ammonia",
+        formula: "NH3",
+        smiles: Some("N"),
+        molar_mass_g_mol: 17.03052,
+        phase_default: "gas",
+        source_type: "builtin",
+    },
 ];
 
 const BASELINE_REACTION_TEMPLATES: &[BaselineReactionTemplateSeed] = &[
@@ -838,7 +892,7 @@ const BASELINE_REACTION_TEMPLATES: &[BaselineReactionTemplateSeed] = &[
         title: "Hydrogen combustion",
         reaction_class: "redox",
         equation_balanced: "2H2 + O2 -> 2H2O",
-        description: "Preset combustion template for hydrogen oxidation.",
+        description: "Educational note: Hydrogen combustion demonstrates a classic exothermic redox process where oxygen is reduced and hydrogen is oxidized.",
         is_preset: true,
         version: 1,
     },
@@ -847,7 +901,34 @@ const BASELINE_REACTION_TEMPLATES: &[BaselineReactionTemplateSeed] = &[
         title: "Strong acid/base neutralization",
         reaction_class: "acid_base",
         equation_balanced: "HCl + NaOH -> NaCl + H2O",
-        description: "Preset neutralization template for common aqueous media.",
+        description: "Educational note: Strong acid/base neutralization highlights proton transfer and the formation of water with a salt in aqueous solution.",
+        is_preset: true,
+        version: 1,
+    },
+    BaselineReactionTemplateSeed {
+        id: "builtin-preset-magnesium-oxidation-v1",
+        title: "Magnesium oxidation",
+        reaction_class: "inorganic",
+        equation_balanced: "2Mg + O2 -> 2MgO",
+        description: "Educational note: Magnesium oxidation illustrates inorganic synthesis and stoichiometric balancing in metal-oxygen reactions.",
+        is_preset: true,
+        version: 1,
+    },
+    BaselineReactionTemplateSeed {
+        id: "builtin-preset-ethene-hydration-v1",
+        title: "Ethene hydration",
+        reaction_class: "organic_basic",
+        equation_balanced: "C2H4 + H2O -> C2H5OH",
+        description: "Educational note: Ethene hydration introduces a foundational organic addition reaction used to form alcohols from alkenes.",
+        is_preset: true,
+        version: 1,
+    },
+    BaselineReactionTemplateSeed {
+        id: "builtin-preset-haber-process-v1",
+        title: "Haber process equilibrium",
+        reaction_class: "equilibrium",
+        equation_balanced: "N2 + 3H2 <-> 2NH3",
+        description: "Educational note: The Haber process demonstrates reversible reactions and how equilibrium position responds to reaction conditions.",
         is_preset: true,
         version: 1,
     },
@@ -903,6 +984,69 @@ const BASELINE_REACTION_SPECIES: &[BaselineReactionSpeciesSeed] = &[
         role: "product",
         stoich_coeff: 1.0,
     },
+    BaselineReactionSpeciesSeed {
+        id: "builtin-preset-magnesium-oxidation-v1-reactant-mg",
+        reaction_template_id: "builtin-preset-magnesium-oxidation-v1",
+        substance_id: "builtin-substance-magnesium",
+        role: "reactant",
+        stoich_coeff: 2.0,
+    },
+    BaselineReactionSpeciesSeed {
+        id: "builtin-preset-magnesium-oxidation-v1-reactant-o2",
+        reaction_template_id: "builtin-preset-magnesium-oxidation-v1",
+        substance_id: "builtin-substance-oxygen",
+        role: "reactant",
+        stoich_coeff: 1.0,
+    },
+    BaselineReactionSpeciesSeed {
+        id: "builtin-preset-magnesium-oxidation-v1-product-mgo",
+        reaction_template_id: "builtin-preset-magnesium-oxidation-v1",
+        substance_id: "builtin-substance-magnesium-oxide",
+        role: "product",
+        stoich_coeff: 2.0,
+    },
+    BaselineReactionSpeciesSeed {
+        id: "builtin-preset-ethene-hydration-v1-reactant-c2h4",
+        reaction_template_id: "builtin-preset-ethene-hydration-v1",
+        substance_id: "builtin-substance-ethene",
+        role: "reactant",
+        stoich_coeff: 1.0,
+    },
+    BaselineReactionSpeciesSeed {
+        id: "builtin-preset-ethene-hydration-v1-reactant-h2o",
+        reaction_template_id: "builtin-preset-ethene-hydration-v1",
+        substance_id: "builtin-substance-water",
+        role: "reactant",
+        stoich_coeff: 1.0,
+    },
+    BaselineReactionSpeciesSeed {
+        id: "builtin-preset-ethene-hydration-v1-product-c2h5oh",
+        reaction_template_id: "builtin-preset-ethene-hydration-v1",
+        substance_id: "builtin-substance-ethanol",
+        role: "product",
+        stoich_coeff: 1.0,
+    },
+    BaselineReactionSpeciesSeed {
+        id: "builtin-preset-haber-process-v1-reactant-n2",
+        reaction_template_id: "builtin-preset-haber-process-v1",
+        substance_id: "builtin-substance-nitrogen",
+        role: "reactant",
+        stoich_coeff: 1.0,
+    },
+    BaselineReactionSpeciesSeed {
+        id: "builtin-preset-haber-process-v1-reactant-h2",
+        reaction_template_id: "builtin-preset-haber-process-v1",
+        substance_id: "builtin-substance-hydrogen",
+        role: "reactant",
+        stoich_coeff: 3.0,
+    },
+    BaselineReactionSpeciesSeed {
+        id: "builtin-preset-haber-process-v1-product-nh3",
+        reaction_template_id: "builtin-preset-haber-process-v1",
+        substance_id: "builtin-substance-ammonia",
+        role: "product",
+        stoich_coeff: 2.0,
+    },
 ];
 
 fn upsert_baseline_substances(
@@ -912,11 +1056,14 @@ fn upsert_baseline_substances(
     let mut resolved_ids = HashMap::with_capacity(BASELINE_SUBSTANCES.len());
 
     for substance in BASELINE_SUBSTANCES {
-        let natural_key_id = transaction
+        let natural_key_row = transaction
             .query_row(
-                "SELECT id FROM substance WHERE name = ?1 AND formula = ?2 LIMIT 1",
+                "SELECT id, source_type
+                FROM substance
+                WHERE name = ?1 AND formula = ?2
+                LIMIT 1",
                 params![substance.name, substance.formula],
-                |row| row.get::<usize, String>(0),
+                |row| Ok((row.get::<usize, String>(0)?, row.get::<usize, String>(1)?)),
             )
             .optional()
             .map_err(|error| {
@@ -942,8 +1089,8 @@ fn upsert_baseline_substances(
                 )
             })?;
 
-        let target_id = if let Some(existing_id) = natural_key_id {
-            existing_id
+        let target_id = if let Some((existing_id, _)) = natural_key_row.as_ref() {
+            existing_id.clone()
         } else if let Some(existing_id) = id_key_id {
             existing_id
         } else {
@@ -974,33 +1121,39 @@ fn upsert_baseline_substances(
             substance.id.to_string()
         };
 
-        transaction
-            .execute(
-                "UPDATE substance
-                SET name = ?1,
-                    formula = ?2,
-                    smiles = ?3,
-                    molar_mass_g_mol = ?4,
-                    phase_default = ?5,
-                    source_type = ?6
-                WHERE id = ?7",
-                params![
-                    substance.name,
-                    substance.formula,
-                    substance.smiles,
-                    substance.molar_mass_g_mol,
-                    substance.phase_default,
-                    substance.source_type,
-                    target_id.as_str()
-                ],
-            )
-            .map_err(|error| {
-                sqlite_error(
-                    database_path,
-                    "failed to reconcile baseline substance",
-                    error,
+        let preserve_existing_non_builtin = matches!(
+            natural_key_row.as_ref(),
+            Some((_, source_type)) if source_type != "builtin"
+        );
+        if !preserve_existing_non_builtin {
+            transaction
+                .execute(
+                    "UPDATE substance
+                    SET name = ?1,
+                        formula = ?2,
+                        smiles = ?3,
+                        molar_mass_g_mol = ?4,
+                        phase_default = ?5,
+                        source_type = ?6
+                    WHERE id = ?7",
+                    params![
+                        substance.name,
+                        substance.formula,
+                        substance.smiles,
+                        substance.molar_mass_g_mol,
+                        substance.phase_default,
+                        substance.source_type,
+                        target_id.as_str()
+                    ],
                 )
-            })?;
+                .map_err(|error| {
+                    sqlite_error(
+                        database_path,
+                        "failed to reconcile baseline substance",
+                        error,
+                    )
+                })?;
+        }
 
         resolved_ids.insert(substance.id, target_id);
     }
@@ -1776,10 +1929,10 @@ mod tests {
                     "legacy-substance-hydrogen",
                     "Hydrogen",
                     "H2",
-                    Option::<String>::None,
+                    Some("[H][H]".to_string()),
                     9.999_f64,
-                    "gas",
-                    "imported"
+                    "liquid",
+                    "user_defined"
                 ],
             )
             .expect("must insert legacy substance");
@@ -1841,18 +1994,34 @@ mod tests {
             .expect("must query hydrogen row count");
         assert_eq!(hydrogen_rows, 1);
 
-        let (hydrogen_id, source_type, molar_mass): (String, String, f64) = connection
+        let (hydrogen_id, source_type, molar_mass, phase_default, smiles): (
+            String,
+            String,
+            f64,
+            String,
+            Option<String>,
+        ) = connection
             .query_row(
-                "SELECT id, source_type, molar_mass_g_mol
+                "SELECT id, source_type, molar_mass_g_mol, phase_default, smiles
                 FROM substance
                 WHERE name = 'Hydrogen' AND formula = 'H2'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .expect("must read reconciled hydrogen row");
         assert_eq!(hydrogen_id, "legacy-substance-hydrogen");
-        assert_eq!(source_type, "builtin");
-        assert!((molar_mass - 2.01588_f64).abs() < 1e-9_f64);
+        assert_eq!(source_type, "user_defined");
+        assert!((molar_mass - 9.999_f64).abs() < 1e-9_f64);
+        assert_eq!(phase_default, "liquid");
+        assert_eq!(smiles, Some("[H][H]".to_string()));
 
         let template_rows: i64 = connection
             .query_row(

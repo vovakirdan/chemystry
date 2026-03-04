@@ -1029,6 +1029,8 @@ pub fn query_substances_v1(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use rusqlite::{params, Connection};
     use serde_json::json;
     use tempfile::TempDir;
@@ -1305,18 +1307,108 @@ mod tests {
             .presets
             .iter()
             .map(|preset| preset.id.as_str())
-            .collect::<Vec<_>>();
+            .collect::<BTreeSet<_>>();
 
         assert_eq!(output.version, CONTRACT_VERSION_V1);
         assert_eq!(output.request_id, "req-list-presets");
-        assert!(!preset_ids.contains(&"user-template-non-preset"));
+        assert!(!preset_ids.contains("user-template-non-preset"));
+        for required_id in [
+            "builtin-preset-hydrogen-combustion-v1",
+            "builtin-preset-acid-base-neutralization-v1",
+            "builtin-preset-magnesium-oxidation-v1",
+            "builtin-preset-ethene-hydration-v1",
+            "builtin-preset-haber-process-v1",
+        ] {
+            assert!(
+                preset_ids.contains(required_id),
+                "required baseline preset {required_id} must be present"
+            );
+        }
+    }
+
+    #[test]
+    fn list_presets_v1_baseline_covers_classes_and_supports_launch_precheck() {
+        let (_temp_dir, repository) = setup_repository("list-presets-baseline-coverage.sqlite3");
+        repository
+            .seed_baseline_data()
+            .expect("baseline seed should succeed");
+
+        let output = list_presets_v1_with_repository(&repository, "req-list-presets-coverage")
+            .expect("listing presets should succeed");
+        let connection = Connection::open(repository.database_path()).expect("must open database");
+
+        let classes = output
+            .presets
+            .iter()
+            .map(|preset| preset.reaction_class.as_str())
+            .collect::<BTreeSet<_>>();
         assert_eq!(
-            preset_ids,
-            vec![
-                "builtin-preset-hydrogen-combustion-v1",
-                "builtin-preset-acid-base-neutralization-v1"
-            ]
+            classes,
+            BTreeSet::from([
+                "inorganic",
+                "acid_base",
+                "redox",
+                "organic_basic",
+                "equilibrium",
+            ])
         );
+
+        for preset in &output.presets {
+            let reactant_count: i64 = connection
+                .query_row(
+                    "SELECT COUNT(1) FROM reaction_species
+                    WHERE reaction_template_id = ?1 AND role = 'reactant'",
+                    params![preset.id.as_str()],
+                    |row| row.get(0),
+                )
+                .expect("must query reactant count for preset");
+            assert!(
+                reactant_count >= 1,
+                "preset {} should have at least one reactant in reaction_species",
+                preset.id
+            );
+
+            let product_count: i64 = connection
+                .query_row(
+                    "SELECT COUNT(1) FROM reaction_species
+                    WHERE reaction_template_id = ?1 AND role = 'product'",
+                    params![preset.id.as_str()],
+                    |row| row.get(0),
+                )
+                .expect("must query product count for preset");
+            assert!(
+                product_count >= 1,
+                "preset {} should have at least one product in reaction_species",
+                preset.id
+            );
+
+            assert!(
+                preset.description.starts_with("Educational note:"),
+                "preset {} should include an educational note prefix",
+                preset.id
+            );
+
+            let run_id = format!("scenario-run-precheck-{}", preset.id);
+            let created_run = repository
+                .create_scenario_run(&NewScenarioRun {
+                    id: run_id.clone(),
+                    reaction_template_id: Some(preset.id.clone()),
+                    name: format!("Precheck {}", preset.title),
+                    temperature_k: 298.15,
+                    pressure_pa: 101_325.0,
+                    gas_medium: "air".to_string(),
+                    precision_profile: "balanced".to_string(),
+                    fps_limit: 60,
+                    particle_limit: 10_000,
+                })
+                .expect("scenario run precheck should succeed for every baseline preset");
+
+            assert_eq!(created_run.id, run_id);
+            assert_eq!(
+                created_run.reaction_template_id.as_deref(),
+                Some(preset.id.as_str())
+            );
+        }
     }
 
     #[test]
