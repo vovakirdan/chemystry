@@ -3,10 +3,13 @@ import type { SubstanceCatalogEntryV1 } from "../../shared/contracts/ipc/v1";
 import {
   LIBRARY_PHASE_FILTER_OPTIONS,
   LIBRARY_SOURCE_FILTER_OPTIONS,
+  isUserSubstanceEditable,
   formatLibraryPhaseLabel,
   formatLibrarySourceLabel,
   type LeftPanelPlaceholderState,
   type LeftPanelTabId,
+  type UserSubstanceDraft,
+  type UserSubstanceDraftField,
 } from "./model";
 
 type LeftPanelTabDefinition = {
@@ -26,6 +29,17 @@ type LeftPanelLibraryViewModel = {
   substances: ReadonlyArray<SubstanceCatalogEntryV1>;
   selectedSubstance: SubstanceCatalogEntryV1 | null;
   onSelectSubstance: (substanceId: string) => void;
+  createDraft: UserSubstanceDraft;
+  createValidationErrors: ReadonlyArray<string>;
+  onCreateDraftFieldChange: (field: UserSubstanceDraftField, value: string) => void;
+  onCreateSubmit: () => void;
+  editDraft: UserSubstanceDraft | null;
+  editValidationErrors: ReadonlyArray<string>;
+  onEditDraftFieldChange: (field: UserSubstanceDraftField, value: string) => void;
+  onEditSubmit: () => void;
+  onDeleteSelected: () => void;
+  isMutating: boolean;
+  mutationErrorMessage: string | null;
   emptyMessage: string;
   errorMessage: string | null;
 };
@@ -121,6 +135,111 @@ function formatMolarMass(value: number | null): string {
   return `${value.toFixed(5)} g/mol`;
 }
 
+type SubstanceEditorFormModel = {
+  testIdPrefix: "library-create" | "library-edit";
+  title: string;
+  draft: UserSubstanceDraft;
+  validationErrors: ReadonlyArray<string>;
+  onFieldChange: (field: UserSubstanceDraftField, value: string) => void;
+  onSubmit: () => void;
+  submitLabel: string;
+  disabled: boolean;
+};
+
+function renderValidationErrors(
+  errors: ReadonlyArray<string>,
+  testId: "library-create-errors" | "library-edit-errors",
+): ReactNode {
+  if (errors.length === 0) {
+    return null;
+  }
+
+  return (
+    <ul className="left-panel-library-form-errors" role="alert" data-testid={testId}>
+      {errors.map((error, index) => (
+        <li key={`${testId}-${index.toString()}`}>{error}</li>
+      ))}
+    </ul>
+  );
+}
+
+function renderSubstanceEditorForm({
+  testIdPrefix,
+  title,
+  draft,
+  validationErrors,
+  onFieldChange,
+  onSubmit,
+  submitLabel,
+  disabled,
+}: SubstanceEditorFormModel): ReactNode {
+  const errorsTestId = `${testIdPrefix}-errors` as "library-create-errors" | "library-edit-errors";
+
+  return (
+    <form
+      className="left-panel-library-form"
+      data-testid={`${testIdPrefix}-form`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSubmit();
+      }}
+    >
+      <h5 className="left-panel-library-form-title">{title}</h5>
+      <label>
+        Name
+        <input
+          type="text"
+          value={draft.name}
+          onChange={(event) => onFieldChange("name", event.currentTarget.value)}
+          data-testid={`${testIdPrefix}-name-input`}
+          disabled={disabled}
+        />
+      </label>
+      <label>
+        Formula
+        <input
+          type="text"
+          value={draft.formula}
+          onChange={(event) => onFieldChange("formula", event.currentTarget.value)}
+          data-testid={`${testIdPrefix}-formula-input`}
+          disabled={disabled}
+        />
+      </label>
+      <label>
+        Phase
+        <select
+          value={draft.phase}
+          onChange={(event) => onFieldChange("phase", event.currentTarget.value)}
+          data-testid={`${testIdPrefix}-phase-select`}
+          disabled={disabled}
+        >
+          {LIBRARY_PHASE_FILTER_OPTIONS.map((phase) => (
+            <option key={phase} value={phase}>
+              {formatLibraryPhaseLabel(phase)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Molar mass (g/mol)
+        <input
+          type="text"
+          inputMode="decimal"
+          value={draft.molarMassInput}
+          onChange={(event) => onFieldChange("molarMassInput", event.currentTarget.value)}
+          placeholder="Required"
+          data-testid={`${testIdPrefix}-molar-mass-input`}
+          disabled={disabled}
+        />
+      </label>
+      {renderValidationErrors(validationErrors, errorsTestId)}
+      <button type="submit" data-testid={`${testIdPrefix}-submit`} disabled={disabled}>
+        {submitLabel}
+      </button>
+    </form>
+  );
+}
+
 function renderLibraryState(
   state: LeftPanelPlaceholderState,
   emptyMessage: string,
@@ -168,8 +287,13 @@ function renderLibraryState(
   return null;
 }
 
-function renderLibraryResults(libraryViewModel: LeftPanelLibraryViewModel): ReactNode {
+function renderLibraryResults(
+  libraryViewModel: LeftPanelLibraryViewModel,
+  controlsDisabled: boolean,
+): ReactNode {
   const { selectedSubstance, substances } = libraryViewModel;
+  const selectedSubstanceIsEditable = isUserSubstanceEditable(selectedSubstance);
+  const mutationControlsDisabled = controlsDisabled || libraryViewModel.isMutating;
 
   return (
     <div className="left-panel-library-results" data-testid="library-results">
@@ -186,6 +310,7 @@ function renderLibraryResults(libraryViewModel: LeftPanelLibraryViewModel): Reac
                 aria-selected={isSelected}
                 data-testid={`library-substance-select-${substance.id}`}
                 onClick={() => libraryViewModel.onSelectSubstance(substance.id)}
+                disabled={mutationControlsDisabled}
               >
                 <span className="left-panel-library-item-name">{label}</span>
                 <span className="left-panel-library-item-meta">
@@ -226,6 +351,62 @@ function renderLibraryResults(libraryViewModel: LeftPanelLibraryViewModel): Reac
           </>
         )}
       </article>
+
+      <section className="left-panel-library-crud" data-testid="library-crud-section">
+        {renderSubstanceEditorForm({
+          testIdPrefix: "library-create",
+          title: "Create user substance",
+          draft: libraryViewModel.createDraft,
+          validationErrors: libraryViewModel.createValidationErrors,
+          onFieldChange: libraryViewModel.onCreateDraftFieldChange,
+          onSubmit: libraryViewModel.onCreateSubmit,
+          submitLabel: "Create",
+          disabled: mutationControlsDisabled,
+        })}
+
+        {selectedSubstance === null ? (
+          <p className="left-panel-placeholder-text" data-testid="library-edit-empty">
+            Select a substance to edit or delete.
+          </p>
+        ) : !selectedSubstanceIsEditable ? (
+          <p className="left-panel-library-readonly" data-testid="library-readonly-message">
+            Builtin and imported substances are read-only.
+          </p>
+        ) : (
+          <div className="left-panel-library-edit-actions" data-testid="library-edit-actions">
+            {libraryViewModel.editDraft !== null &&
+              renderSubstanceEditorForm({
+                testIdPrefix: "library-edit",
+                title: "Edit selected user substance",
+                draft: libraryViewModel.editDraft,
+                validationErrors: libraryViewModel.editValidationErrors,
+                onFieldChange: libraryViewModel.onEditDraftFieldChange,
+                onSubmit: libraryViewModel.onEditSubmit,
+                submitLabel: "Save changes",
+                disabled: mutationControlsDisabled,
+              })}
+            <button
+              type="button"
+              className="left-panel-library-delete-button"
+              data-testid="library-delete-button"
+              onClick={libraryViewModel.onDeleteSelected}
+              disabled={mutationControlsDisabled}
+            >
+              Delete selected user substance
+            </button>
+          </div>
+        )}
+
+        {libraryViewModel.mutationErrorMessage !== null && (
+          <p
+            className="left-panel-library-mutation-error"
+            role="alert"
+            data-testid="library-mutation-error"
+          >
+            {libraryViewModel.mutationErrorMessage}
+          </p>
+        )}
+      </section>
     </div>
   );
 }
@@ -234,7 +415,7 @@ function renderLibraryView(
   state: LeftPanelPlaceholderState,
   libraryViewModel: LeftPanelLibraryViewModel,
 ): ReactNode {
-  const controlsDisabled = state === "loading";
+  const controlsDisabled = state === "loading" || libraryViewModel.isMutating;
   const stateContent = renderLibraryState(
     state,
     libraryViewModel.emptyMessage,
@@ -301,7 +482,7 @@ function renderLibraryView(
         aria-live="polite"
         data-testid="left-panel-data-boundary-library"
       >
-        {stateContent ?? renderLibraryResults(libraryViewModel)}
+        {stateContent ?? renderLibraryResults(libraryViewModel, controlsDisabled)}
       </div>
     </div>
   );

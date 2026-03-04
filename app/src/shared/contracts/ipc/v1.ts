@@ -7,6 +7,9 @@ export const IPC_COMMANDS_V1 = {
   health: "health_v1",
   getFeatureFlags: "get_feature_flags_v1",
   listSubstances: "query_substances_v1",
+  createSubstance: "create_substance_v1",
+  updateSubstance: "update_substance_v1",
+  deleteSubstance: "delete_substance_v1",
 } as const;
 
 export type IpcVersionV1 = typeof IPC_CONTRACT_VERSION_V1;
@@ -49,6 +52,33 @@ export interface SubstanceCatalogEntryV1 {
 
 export interface ListSubstancesV1Output extends RequestScopedPayloadV1 {
   substances: ReadonlyArray<SubstanceCatalogEntryV1>;
+}
+
+export interface CreateSubstanceV1Input {
+  name: string;
+  formula: string;
+  phase: SubstancePhaseV1;
+  molarMassGMol: number;
+}
+
+export interface UpdateSubstanceV1Input extends CreateSubstanceV1Input {
+  id: string;
+}
+
+export interface DeleteSubstanceV1Input {
+  id: string;
+}
+
+export interface SubstanceMutationV1Output extends RequestScopedPayloadV1 {
+  substance: SubstanceCatalogEntryV1;
+}
+
+export type CreateSubstanceV1Output = SubstanceMutationV1Output;
+
+export type UpdateSubstanceV1Output = SubstanceMutationV1Output;
+
+export interface DeleteSubstanceV1Output extends RequestScopedPayloadV1 {
+  deleted: boolean;
 }
 
 export type CommandErrorCategoryV1 = "validation" | "io" | "simulation" | "import" | "internal";

@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { SubstanceCatalogEntryV1 } from "../../shared/contracts/ipc/v1";
 import {
+  DEFAULT_USER_SUBSTANCE_DRAFT,
   LIBRARY_PHASE_FILTER_OPTIONS,
   LIBRARY_SOURCE_FILTER_OPTIONS,
+  createUserSubstanceDraftFromCatalogEntry,
   filterLibrarySubstances,
+  isUserSubstanceEditable,
   normalizeLibrarySearchQuery,
   resolveSelectedLibrarySubstanceId,
+  validateUserSubstanceDraft,
 } from "./model";
 
 const SAMPLE_SUBSTANCES: ReadonlyArray<SubstanceCatalogEntryV1> = [
@@ -75,5 +79,67 @@ describe("left panel library model", () => {
     );
 
     expect(resolveSelectedLibrarySubstanceId("any", [])).toBeNull();
+  });
+
+  it("validates draft fields before submit and rejects invalid payloads", () => {
+    const invalidDraftResult = validateUserSubstanceDraft({
+      ...DEFAULT_USER_SUBSTANCE_DRAFT,
+      name: "   ",
+      formula: "",
+      molarMassInput: "-5",
+    });
+
+    expect(invalidDraftResult.input).toBeNull();
+    expect(invalidDraftResult.errors).toEqual([
+      "Name is required.",
+      "Formula is required.",
+      "Molar mass must be a positive number.",
+    ]);
+  });
+
+  it("requires molar mass before submit", () => {
+    const invalidDraftResult = validateUserSubstanceDraft({
+      ...DEFAULT_USER_SUBSTANCE_DRAFT,
+      name: "Methane",
+      formula: "CH4",
+      phase: "gas",
+      molarMassInput: "   ",
+    });
+
+    expect(invalidDraftResult.input).toBeNull();
+    expect(invalidDraftResult.errors).toEqual(["Molar mass is required."]);
+  });
+
+  it("normalizes valid draft values for create/update payloads", () => {
+    const validDraftResult = validateUserSubstanceDraft({
+      ...DEFAULT_USER_SUBSTANCE_DRAFT,
+      name: "  Ethanol ",
+      formula: " C2H6O ",
+      phase: "liquid",
+      molarMassInput: "46.06844",
+    });
+
+    expect(validDraftResult.errors).toEqual([]);
+    expect(validDraftResult.input).toEqual({
+      name: "Ethanol",
+      formula: "C2H6O",
+      phase: "liquid",
+      molarMassGMol: 46.06844,
+    });
+  });
+
+  it("marks builtin/imported as read-only and user entries as editable", () => {
+    expect(isUserSubstanceEditable(SAMPLE_SUBSTANCES[0])).toBe(false);
+    expect(isUserSubstanceEditable(SAMPLE_SUBSTANCES[2])).toBe(true);
+    expect(isUserSubstanceEditable(null)).toBe(false);
+  });
+
+  it("creates edit draft values from selected catalog entry", () => {
+    expect(createUserSubstanceDraftFromCatalogEntry(SAMPLE_SUBSTANCES[2])).toEqual({
+      name: "Sodium Chloride",
+      formula: "NaCl",
+      phase: "aqueous",
+      molarMassInput: "58.44277",
+    });
   });
 });

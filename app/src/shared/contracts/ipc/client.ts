@@ -6,6 +6,10 @@ import {
   withFeatureFlagDefaults,
 } from "../../config/featureFlags";
 import {
+  type CreateSubstanceV1Input,
+  type CreateSubstanceV1Output,
+  type DeleteSubstanceV1Input,
+  type DeleteSubstanceV1Output,
   IPC_COMMANDS_V1,
   IPC_CONTRACT_VERSION_V1,
   SUBSTANCE_PHASES_V1,
@@ -18,8 +22,11 @@ import {
   type HealthV1Output,
   type ListSubstancesV1Output,
   type SubstanceCatalogEntryV1,
+  type SubstanceMutationV1Output,
   type SubstancePhaseV1,
   type SubstanceSourceV1,
+  type UpdateSubstanceV1Input,
+  type UpdateSubstanceV1Output,
 } from "./v1";
 
 const COMMAND_ERROR_CATEGORIES_V1: ReadonlySet<CommandErrorCategoryV1> = new Set([
@@ -260,6 +267,55 @@ function parseListSubstancesV1Output(payload: unknown): ListSubstancesV1Output {
   };
 }
 
+function parseSubstanceMutationV1Output(payload: unknown): SubstanceMutationV1Output {
+  if (!isRecord(payload)) {
+    throw createInvalidSubstancePayloadError("Substance mutation payload is not an object.");
+  }
+
+  const requestId =
+    typeof payload.requestId === "string" ? payload.requestId : nextClientRequestId();
+  if (payload.version !== IPC_CONTRACT_VERSION_V1) {
+    throw createInvalidSubstancePayloadError(
+      "Substance mutation payload version is invalid.",
+      requestId,
+    );
+  }
+
+  return {
+    version: IPC_CONTRACT_VERSION_V1,
+    requestId,
+    substance: parseSubstanceEntryV1(payload.substance, requestId, 0),
+  };
+}
+
+function parseDeleteSubstanceV1Output(payload: unknown): DeleteSubstanceV1Output {
+  if (!isRecord(payload)) {
+    throw createInvalidSubstancePayloadError("Delete substance payload is not an object.");
+  }
+
+  const requestId =
+    typeof payload.requestId === "string" ? payload.requestId : nextClientRequestId();
+  if (payload.version !== IPC_CONTRACT_VERSION_V1) {
+    throw createInvalidSubstancePayloadError(
+      "Delete substance payload version is invalid.",
+      requestId,
+    );
+  }
+
+  if (typeof payload.deleted !== "boolean") {
+    throw createInvalidSubstancePayloadError(
+      "Delete substance payload is missing the deleted flag.",
+      requestId,
+    );
+  }
+
+  return {
+    version: IPC_CONTRACT_VERSION_V1,
+    requestId,
+    deleted: payload.deleted,
+  };
+}
+
 function isCommandErrorCategoryV1(value: unknown): value is CommandErrorCategoryV1 {
   return (
     typeof value === "string" && COMMAND_ERROR_CATEGORIES_V1.has(value as CommandErrorCategoryV1)
@@ -347,6 +403,39 @@ export async function listSubstancesV1(): Promise<ListSubstancesV1Output> {
       input: {},
     });
     return parseListSubstancesV1Output(payload);
+  } catch (error) {
+    throw normalizeCommandErrorV1(error);
+  }
+}
+
+export async function createSubstanceV1(
+  input: CreateSubstanceV1Input,
+): Promise<CreateSubstanceV1Output> {
+  try {
+    const payload = await invoke<unknown>(IPC_COMMANDS_V1.createSubstance, { input });
+    return parseSubstanceMutationV1Output(payload);
+  } catch (error) {
+    throw normalizeCommandErrorV1(error);
+  }
+}
+
+export async function updateSubstanceV1(
+  input: UpdateSubstanceV1Input,
+): Promise<UpdateSubstanceV1Output> {
+  try {
+    const payload = await invoke<unknown>(IPC_COMMANDS_V1.updateSubstance, { input });
+    return parseSubstanceMutationV1Output(payload);
+  } catch (error) {
+    throw normalizeCommandErrorV1(error);
+  }
+}
+
+export async function deleteSubstanceV1(
+  input: DeleteSubstanceV1Input,
+): Promise<DeleteSubstanceV1Output> {
+  try {
+    const payload = await invoke<unknown>(IPC_COMMANDS_V1.deleteSubstance, { input });
+    return parseDeleteSubstanceV1Output(payload);
   } catch (error) {
     throw normalizeCommandErrorV1(error);
   }

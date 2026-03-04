@@ -4,15 +4,22 @@ use tauri::State;
 use crate::infra::config::feature_flags::FeatureFlags as ConfigFeatureFlags;
 use crate::infra::errors::{CommandError, CommandResult};
 use crate::infra::logging;
-use crate::storage::{StorageError, StorageRepository, Substance};
+use crate::storage::{NewSubstance, StorageError, StorageRepository, Substance, UpdateSubstance};
 
 pub const CONTRACT_VERSION_V1: &str = "v1";
 const MAX_NAME_LENGTH: usize = 64;
 const MAX_SUBSTANCE_SEARCH_LENGTH: usize = 128;
+const MAX_SUBSTANCE_ID_LENGTH: usize = 128;
+const MAX_SUBSTANCE_NAME_LENGTH: usize = 128;
+const MAX_SUBSTANCE_FORMULA_LENGTH: usize = 64;
+const MAX_SUBSTANCE_SMILES_LENGTH: usize = 512;
 const GREET_COMMAND_NAME: &str = "greet_v1";
 const HEALTH_COMMAND_NAME: &str = "health_v1";
 const GET_FEATURE_FLAGS_COMMAND_NAME: &str = "get_feature_flags_v1";
 const QUERY_SUBSTANCES_COMMAND_NAME: &str = "query_substances_v1";
+const CREATE_SUBSTANCE_COMMAND_NAME: &str = "create_substance_v1";
+const UPDATE_SUBSTANCE_COMMAND_NAME: &str = "update_substance_v1";
+const DELETE_SUBSTANCE_COMMAND_NAME: &str = "delete_substance_v1";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,6 +100,69 @@ pub struct QuerySubstancesV1Output {
     pub substances: Vec<SubstanceCatalogItemV1>,
 }
 
+#[derive(Debug, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSubstanceV1Input {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub formula: Option<String>,
+    #[serde(default)]
+    pub smiles: Option<String>,
+    #[serde(default)]
+    pub molar_mass_g_mol: Option<f64>,
+    #[serde(default)]
+    pub phase: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSubstanceV1Output {
+    pub version: &'static str,
+    pub request_id: String,
+    pub substance: SubstanceCatalogItemV1,
+}
+
+#[derive(Debug, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSubstanceV1Input {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub formula: Option<String>,
+    #[serde(default)]
+    pub smiles: Option<String>,
+    #[serde(default)]
+    pub molar_mass_g_mol: Option<f64>,
+    #[serde(default)]
+    pub phase: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSubstanceV1Output {
+    pub version: &'static str,
+    pub request_id: String,
+    pub substance: SubstanceCatalogItemV1,
+}
+
+#[derive(Debug, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteSubstanceV1Input {
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteSubstanceV1Output {
+    pub version: &'static str,
+    pub request_id: String,
+    pub deleted: bool,
+}
+
 pub type CommandErrorV1 = CommandError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +170,26 @@ pub struct QuerySubstancesFiltersV1 {
     pub search: Option<String>,
     pub phase_filter: Option<String>,
     pub source_filter: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidatedSubstancePayloadV1 {
+    pub name: String,
+    pub formula: String,
+    pub smiles: Option<String>,
+    pub molar_mass_g_mol: f64,
+    pub phase: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidatedUpdateSubstanceV1Input {
+    pub id: String,
+    pub payload: ValidatedSubstancePayloadV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedDeleteSubstanceV1Input {
+    pub id: String,
 }
 
 fn validation_error(
@@ -156,6 +246,277 @@ fn map_substance_to_catalog_item(substance: Substance) -> SubstanceCatalogItemV1
         phase: substance.phase_default,
         source: source_type_for_contract(&substance.source_type),
     }
+}
+
+fn normalize_optional_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_string)
+}
+
+fn validate_required_text_field(
+    value: Option<&str>,
+    request_id: &str,
+    field_name: &'static str,
+    required_code: &'static str,
+    too_long_code: &'static str,
+    max_length: usize,
+) -> CommandResult<String> {
+    let Some(normalized) = normalize_optional_text(value) else {
+        return Err(validation_error(
+            request_id,
+            required_code,
+            format!("`{field_name}` is required."),
+        ));
+    };
+
+    if normalized.chars().count() > max_length {
+        return Err(validation_error(
+            request_id,
+            too_long_code,
+            format!("`{field_name}` must be at most {max_length} characters."),
+        ));
+    }
+
+    Ok(normalized)
+}
+
+fn validate_substance_id(value: Option<&str>, request_id: &str) -> CommandResult<String> {
+    validate_required_text_field(
+        value,
+        request_id,
+        "id",
+        "SUBSTANCE_ID_REQUIRED",
+        "SUBSTANCE_ID_TOO_LONG",
+        MAX_SUBSTANCE_ID_LENGTH,
+    )
+}
+
+fn validate_substance_phase(value: Option<&str>, request_id: &str) -> CommandResult<String> {
+    let Some(phase) = normalize_optional_filter(value) else {
+        return Err(validation_error(
+            request_id,
+            "SUBSTANCE_PHASE_REQUIRED",
+            "`phase` is required.",
+        ));
+    };
+
+    if !matches!(phase.as_str(), "solid" | "liquid" | "gas" | "aqueous") {
+        return Err(validation_error(
+            request_id,
+            "SUBSTANCE_PHASE_INVALID",
+            "`phase` must be one of: solid, liquid, gas, aqueous.",
+        ));
+    }
+
+    Ok(phase)
+}
+
+fn validate_substance_molar_mass(value: Option<f64>, request_id: &str) -> CommandResult<f64> {
+    let Some(molar_mass) = value else {
+        return Err(validation_error(
+            request_id,
+            "SUBSTANCE_MOLAR_MASS_REQUIRED",
+            "`molarMassGMol` is required.",
+        ));
+    };
+
+    if !molar_mass.is_finite() || molar_mass <= 0.0 {
+        return Err(validation_error(
+            request_id,
+            "SUBSTANCE_MOLAR_MASS_INVALID",
+            "`molarMassGMol` must be a positive number.",
+        ));
+    }
+
+    Ok(molar_mass)
+}
+
+fn validate_substance_payload(
+    name: Option<&str>,
+    formula: Option<&str>,
+    smiles: Option<&str>,
+    molar_mass_g_mol: Option<f64>,
+    phase: Option<&str>,
+    request_id: &str,
+) -> CommandResult<ValidatedSubstancePayloadV1> {
+    let name = validate_required_text_field(
+        name,
+        request_id,
+        "name",
+        "SUBSTANCE_NAME_REQUIRED",
+        "SUBSTANCE_NAME_TOO_LONG",
+        MAX_SUBSTANCE_NAME_LENGTH,
+    )?;
+    let formula = validate_required_text_field(
+        formula,
+        request_id,
+        "formula",
+        "SUBSTANCE_FORMULA_REQUIRED",
+        "SUBSTANCE_FORMULA_TOO_LONG",
+        MAX_SUBSTANCE_FORMULA_LENGTH,
+    )?;
+    let smiles = match normalize_optional_text(smiles) {
+        Some(value) if value.chars().count() > MAX_SUBSTANCE_SMILES_LENGTH => {
+            return Err(validation_error(
+                request_id,
+                "SUBSTANCE_SMILES_TOO_LONG",
+                format!("`smiles` must be at most {MAX_SUBSTANCE_SMILES_LENGTH} characters."),
+            ));
+        }
+        value => value,
+    };
+
+    Ok(ValidatedSubstancePayloadV1 {
+        name,
+        formula,
+        smiles,
+        molar_mass_g_mol: validate_substance_molar_mass(molar_mass_g_mol, request_id)?,
+        phase: validate_substance_phase(phase, request_id)?,
+    })
+}
+
+pub fn validate_create_substance_v1_input(
+    input: &CreateSubstanceV1Input,
+    request_id: &str,
+) -> CommandResult<ValidatedSubstancePayloadV1> {
+    validate_substance_payload(
+        input.name.as_deref(),
+        input.formula.as_deref(),
+        input.smiles.as_deref(),
+        input.molar_mass_g_mol,
+        input.phase.as_deref(),
+        request_id,
+    )
+}
+
+pub fn validate_update_substance_v1_input(
+    input: &UpdateSubstanceV1Input,
+    request_id: &str,
+) -> CommandResult<ValidatedUpdateSubstanceV1Input> {
+    Ok(ValidatedUpdateSubstanceV1Input {
+        id: validate_substance_id(input.id.as_deref(), request_id)?,
+        payload: validate_substance_payload(
+            input.name.as_deref(),
+            input.formula.as_deref(),
+            input.smiles.as_deref(),
+            input.molar_mass_g_mol,
+            input.phase.as_deref(),
+            request_id,
+        )?,
+    })
+}
+
+pub fn validate_delete_substance_v1_input(
+    input: &DeleteSubstanceV1Input,
+    request_id: &str,
+) -> CommandResult<ValidatedDeleteSubstanceV1Input> {
+    Ok(ValidatedDeleteSubstanceV1Input {
+        id: validate_substance_id(input.id.as_deref(), request_id)?,
+    })
+}
+
+fn map_substance_unique_constraint_error(
+    request_id: &str,
+    error: &StorageError,
+) -> Option<CommandErrorV1> {
+    if let StorageError::Sqlite { message, .. } = error {
+        if message.contains("UNIQUE constraint failed: substance.name, substance.formula") {
+            return Some(validation_error(
+                request_id,
+                "SUBSTANCE_DUPLICATE",
+                "A substance with the same `name` and `formula` already exists.",
+            ));
+        }
+    }
+
+    None
+}
+
+fn map_storage_substance_error(
+    request_id: &str,
+    error: StorageError,
+    io_code: &'static str,
+    io_message: &'static str,
+    internal_code: &'static str,
+    internal_message: &'static str,
+) -> CommandErrorV1 {
+    match error {
+        StorageError::AppDataPathResolution(_)
+        | StorageError::InvalidDatabasePath(_)
+        | StorageError::InvalidBackupFormat { .. }
+        | StorageError::Io { .. } => {
+            CommandError::io(CONTRACT_VERSION_V1, request_id, io_code, io_message)
+        }
+        StorageError::Sqlite { .. }
+        | StorageError::InvalidMigrationPlan(_)
+        | StorageError::DataInvariant(_)
+        | StorageError::AsyncTaskJoin(_)
+        | StorageError::MigrationFailed { .. } => CommandError::internal(
+            CONTRACT_VERSION_V1,
+            request_id,
+            internal_code,
+            internal_message,
+        ),
+    }
+}
+
+fn map_storage_create_error(request_id: &str, error: StorageError) -> CommandErrorV1 {
+    if let Some(mapped_error) = map_substance_unique_constraint_error(request_id, &error) {
+        return mapped_error;
+    }
+
+    map_storage_substance_error(
+        request_id,
+        error,
+        "SUBSTANCE_CREATE_IO_FAILED",
+        "Failed to write local catalog storage.",
+        "SUBSTANCE_CREATE_FAILED",
+        "Failed to create substance in local catalog.",
+    )
+}
+
+fn map_storage_update_error(request_id: &str, error: StorageError) -> CommandErrorV1 {
+    if let Some(mapped_error) = map_substance_unique_constraint_error(request_id, &error) {
+        return mapped_error;
+    }
+
+    map_storage_substance_error(
+        request_id,
+        error,
+        "SUBSTANCE_UPDATE_IO_FAILED",
+        "Failed to write local catalog storage.",
+        "SUBSTANCE_UPDATE_FAILED",
+        "Failed to update substance in local catalog.",
+    )
+}
+
+fn map_storage_delete_error(request_id: &str, error: StorageError) -> CommandErrorV1 {
+    map_storage_substance_error(
+        request_id,
+        error,
+        "SUBSTANCE_DELETE_IO_FAILED",
+        "Failed to write local catalog storage.",
+        "SUBSTANCE_DELETE_FAILED",
+        "Failed to delete substance from local catalog.",
+    )
+}
+
+fn ensure_substance_is_user_defined(substance: &Substance, request_id: &str) -> CommandResult<()> {
+    if substance.source_type != "user_defined" {
+        return Err(validation_error(
+            request_id,
+            "SUBSTANCE_SOURCE_IMMUTABLE",
+            "Only user-defined substances can be updated or deleted.",
+        ));
+    }
+
+    Ok(())
+}
+
+fn next_user_defined_substance_id(request_id: &str) -> String {
+    format!("user-substance-{request_id}")
 }
 
 fn map_storage_query_error(request_id: &str, error: StorageError) -> CommandErrorV1 {
@@ -236,6 +597,159 @@ pub fn validate_query_substances_v1_input(
     })
 }
 
+fn create_substance_v1_with_repository(
+    input: &CreateSubstanceV1Input,
+    repository: &StorageRepository,
+    request_id: &str,
+) -> CommandResult<CreateSubstanceV1Output> {
+    let payload = validate_create_substance_v1_input(input, request_id)?;
+    let substance_id = next_user_defined_substance_id(request_id);
+    let inserted = repository
+        .create_substance(&NewSubstance {
+            id: substance_id,
+            name: payload.name,
+            formula: payload.formula,
+            smiles: payload.smiles,
+            molar_mass_g_mol: payload.molar_mass_g_mol,
+            phase_default: payload.phase,
+            source_type: "user_defined".to_string(),
+        })
+        .map_err(|error| {
+            eprintln!(
+                "[ipc] storage_failure command={} request_id={} details={}",
+                CREATE_SUBSTANCE_COMMAND_NAME, request_id, error
+            );
+            map_storage_create_error(request_id, error)
+        })?;
+
+    Ok(CreateSubstanceV1Output {
+        version: CONTRACT_VERSION_V1,
+        request_id: request_id.to_string(),
+        substance: map_substance_to_catalog_item(inserted),
+    })
+}
+
+fn update_substance_v1_with_repository(
+    input: &UpdateSubstanceV1Input,
+    repository: &StorageRepository,
+    request_id: &str,
+) -> CommandResult<UpdateSubstanceV1Output> {
+    let validated = validate_update_substance_v1_input(input, request_id)?;
+    let existing = repository
+        .get_substance(&validated.id)
+        .map_err(|error| {
+            eprintln!(
+                "[ipc] storage_failure command={} request_id={} details={}",
+                UPDATE_SUBSTANCE_COMMAND_NAME, request_id, error
+            );
+            map_storage_update_error(request_id, error)
+        })?
+        .ok_or_else(|| {
+            validation_error(
+                request_id,
+                "SUBSTANCE_NOT_FOUND",
+                format!("Substance `{}` was not found.", validated.id),
+            )
+        })?;
+
+    ensure_substance_is_user_defined(&existing, request_id)?;
+
+    let updated = repository
+        .update_substance(
+            &validated.id,
+            &UpdateSubstance {
+                name: validated.payload.name,
+                formula: validated.payload.formula,
+                smiles: validated.payload.smiles,
+                molar_mass_g_mol: validated.payload.molar_mass_g_mol,
+                phase_default: validated.payload.phase,
+                source_type: "user_defined".to_string(),
+            },
+        )
+        .map_err(|error| {
+            eprintln!(
+                "[ipc] storage_failure command={} request_id={} details={}",
+                UPDATE_SUBSTANCE_COMMAND_NAME, request_id, error
+            );
+            map_storage_update_error(request_id, error)
+        })?
+        .ok_or_else(|| {
+            validation_error(
+                request_id,
+                "SUBSTANCE_NOT_FOUND",
+                format!("Substance `{}` was not found.", validated.id),
+            )
+        })?;
+
+    Ok(UpdateSubstanceV1Output {
+        version: CONTRACT_VERSION_V1,
+        request_id: request_id.to_string(),
+        substance: map_substance_to_catalog_item(updated),
+    })
+}
+
+fn delete_substance_v1_with_repository(
+    input: &DeleteSubstanceV1Input,
+    repository: &StorageRepository,
+    request_id: &str,
+) -> CommandResult<DeleteSubstanceV1Output> {
+    let validated = validate_delete_substance_v1_input(input, request_id)?;
+    let existing = repository
+        .get_substance(&validated.id)
+        .map_err(|error| {
+            eprintln!(
+                "[ipc] storage_failure command={} request_id={} details={}",
+                DELETE_SUBSTANCE_COMMAND_NAME, request_id, error
+            );
+            map_storage_delete_error(request_id, error)
+        })?
+        .ok_or_else(|| {
+            validation_error(
+                request_id,
+                "SUBSTANCE_NOT_FOUND",
+                format!("Substance `{}` was not found.", validated.id),
+            )
+        })?;
+
+    ensure_substance_is_user_defined(&existing, request_id)?;
+
+    let usage_count = repository
+        .count_substance_scenario_usage(&validated.id)
+        .map_err(|error| {
+            eprintln!(
+                "[ipc] storage_failure command={} request_id={} details={}",
+                DELETE_SUBSTANCE_COMMAND_NAME, request_id, error
+            );
+            map_storage_delete_error(request_id, error)
+        })?;
+    if usage_count > 0 {
+        return Err(validation_error(
+            request_id,
+            "SUBSTANCE_IN_USE",
+            format!(
+                "Substance `{}` is used in {usage_count} scenario amount record(s) and cannot be deleted.",
+                validated.id
+            ),
+        ));
+    }
+
+    let deleted = repository
+        .delete_substance(&validated.id)
+        .map_err(|error| {
+            eprintln!(
+                "[ipc] storage_failure command={} request_id={} details={}",
+                DELETE_SUBSTANCE_COMMAND_NAME, request_id, error
+            );
+            map_storage_delete_error(request_id, error)
+        })?;
+
+    Ok(DeleteSubstanceV1Output {
+        version: CONTRACT_VERSION_V1,
+        request_id: request_id.to_string(),
+        deleted,
+    })
+}
+
 #[tauri::command]
 pub fn greet_v1(input: GreetV1Input) -> CommandResult<GreetV1Output> {
     let request_id = logging::next_request_id();
@@ -293,6 +807,69 @@ pub fn get_feature_flags_v1() -> GetFeatureFlagsV1Output {
 }
 
 #[tauri::command]
+pub fn create_substance_v1(
+    input: CreateSubstanceV1Input,
+    repository: State<'_, StorageRepository>,
+) -> CommandResult<CreateSubstanceV1Output> {
+    let request_id = logging::next_request_id();
+    logging::log_command_start(CREATE_SUBSTANCE_COMMAND_NAME, &request_id);
+
+    let result = create_substance_v1_with_repository(&input, &repository, &request_id);
+    match result {
+        Ok(output) => {
+            logging::log_command_success(CREATE_SUBSTANCE_COMMAND_NAME, &request_id);
+            Ok(output)
+        }
+        Err(error) => {
+            logging::log_command_failure(CREATE_SUBSTANCE_COMMAND_NAME, &error);
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn update_substance_v1(
+    input: UpdateSubstanceV1Input,
+    repository: State<'_, StorageRepository>,
+) -> CommandResult<UpdateSubstanceV1Output> {
+    let request_id = logging::next_request_id();
+    logging::log_command_start(UPDATE_SUBSTANCE_COMMAND_NAME, &request_id);
+
+    let result = update_substance_v1_with_repository(&input, &repository, &request_id);
+    match result {
+        Ok(output) => {
+            logging::log_command_success(UPDATE_SUBSTANCE_COMMAND_NAME, &request_id);
+            Ok(output)
+        }
+        Err(error) => {
+            logging::log_command_failure(UPDATE_SUBSTANCE_COMMAND_NAME, &error);
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn delete_substance_v1(
+    input: DeleteSubstanceV1Input,
+    repository: State<'_, StorageRepository>,
+) -> CommandResult<DeleteSubstanceV1Output> {
+    let request_id = logging::next_request_id();
+    logging::log_command_start(DELETE_SUBSTANCE_COMMAND_NAME, &request_id);
+
+    let result = delete_substance_v1_with_repository(&input, &repository, &request_id);
+    match result {
+        Ok(output) => {
+            logging::log_command_success(DELETE_SUBSTANCE_COMMAND_NAME, &request_id);
+            Ok(output)
+        }
+        Err(error) => {
+            logging::log_command_failure(DELETE_SUBSTANCE_COMMAND_NAME, &error);
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
 pub fn query_substances_v1(
     input: QuerySubstancesV1Input,
     repository: State<'_, StorageRepository>,
@@ -340,8 +917,19 @@ pub fn query_substances_v1(
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::{params, Connection};
+    use tempfile::TempDir;
+
     use super::*;
     use crate::infra::errors::ErrorCategory;
+    use crate::storage::{run_migrations, NewScenarioRun, NewSubstance, StorageRepository};
+
+    fn setup_repository(file_name: &str) -> (TempDir, StorageRepository) {
+        let temp_dir = TempDir::new().expect("must create temp directory");
+        let database_path = temp_dir.path().join(file_name);
+        run_migrations(&database_path).expect("migrations should succeed");
+        (temp_dir, StorageRepository::new(database_path))
+    }
 
     #[test]
     fn validate_greet_v1_input_accepts_valid_name() {
@@ -489,6 +1077,302 @@ mod tests {
                 message: "`source` must be one of: builtin, imported, user.".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn validate_create_substance_v1_input_rejects_missing_required_fields() {
+        let request_id = "req-create-missing";
+
+        assert_eq!(
+            validate_create_substance_v1_input(&CreateSubstanceV1Input::default(), request_id),
+            Err(CommandErrorV1 {
+                version: CONTRACT_VERSION_V1,
+                request_id: request_id.to_string(),
+                category: ErrorCategory::Validation,
+                code: "SUBSTANCE_NAME_REQUIRED",
+                message: "`name` is required.".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn validate_create_substance_v1_input_rejects_invalid_phase() {
+        let request_id = "req-create-phase";
+        let input = CreateSubstanceV1Input {
+            name: Some("Acetone".to_string()),
+            formula: Some("C3H6O".to_string()),
+            smiles: Some("CC(=O)C".to_string()),
+            molar_mass_g_mol: Some(58.08),
+            phase: Some("plasma".to_string()),
+        };
+
+        assert_eq!(
+            validate_create_substance_v1_input(&input, request_id),
+            Err(CommandErrorV1 {
+                version: CONTRACT_VERSION_V1,
+                request_id: request_id.to_string(),
+                category: ErrorCategory::Validation,
+                code: "SUBSTANCE_PHASE_INVALID",
+                message: "`phase` must be one of: solid, liquid, gas, aqueous.".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn validate_update_substance_v1_input_rejects_missing_id() {
+        let request_id = "req-update-missing-id";
+        let input = UpdateSubstanceV1Input {
+            id: Some("  ".to_string()),
+            name: Some("Acetone".to_string()),
+            formula: Some("C3H6O".to_string()),
+            smiles: None,
+            molar_mass_g_mol: Some(58.08),
+            phase: Some("liquid".to_string()),
+        };
+
+        assert_eq!(
+            validate_update_substance_v1_input(&input, request_id),
+            Err(CommandErrorV1 {
+                version: CONTRACT_VERSION_V1,
+                request_id: request_id.to_string(),
+                category: ErrorCategory::Validation,
+                code: "SUBSTANCE_ID_REQUIRED",
+                message: "`id` is required.".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn validate_update_substance_v1_input_rejects_invalid_molar_mass() {
+        let request_id = "req-update-mass";
+        let input = UpdateSubstanceV1Input {
+            id: Some("substance-1".to_string()),
+            name: Some("Acetone".to_string()),
+            formula: Some("C3H6O".to_string()),
+            smiles: None,
+            molar_mass_g_mol: Some(0.0),
+            phase: Some("liquid".to_string()),
+        };
+
+        assert_eq!(
+            validate_update_substance_v1_input(&input, request_id),
+            Err(CommandErrorV1 {
+                version: CONTRACT_VERSION_V1,
+                request_id: request_id.to_string(),
+                category: ErrorCategory::Validation,
+                code: "SUBSTANCE_MOLAR_MASS_INVALID",
+                message: "`molarMassGMol` must be a positive number.".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn update_substance_v1_rejects_builtin_substances() {
+        let (_temp_dir, repository) = setup_repository("update-builtin.sqlite3");
+        repository
+            .create_substance(&NewSubstance {
+                id: "builtin-test-substance".to_string(),
+                name: "Built-in hydrogen".to_string(),
+                formula: "H2".to_string(),
+                smiles: None,
+                molar_mass_g_mol: 2.01588,
+                phase_default: "gas".to_string(),
+                source_type: "builtin".to_string(),
+            })
+            .expect("must create builtin substance");
+
+        let error = update_substance_v1_with_repository(
+            &UpdateSubstanceV1Input {
+                id: Some("builtin-test-substance".to_string()),
+                name: Some("Hydrogen updated".to_string()),
+                formula: Some("H2".to_string()),
+                smiles: None,
+                molar_mass_g_mol: Some(2.1),
+                phase: Some("gas".to_string()),
+            },
+            &repository,
+            "req-update-builtin",
+        )
+        .expect_err("builtin substance updates must be rejected");
+
+        assert_eq!(error.category, ErrorCategory::Validation);
+        assert_eq!(error.code, "SUBSTANCE_SOURCE_IMMUTABLE");
+    }
+
+    #[test]
+    fn delete_substance_v1_rejects_imported_substances() {
+        let (_temp_dir, repository) = setup_repository("delete-imported.sqlite3");
+        repository
+            .create_substance(&NewSubstance {
+                id: "imported-test-substance".to_string(),
+                name: "Imported acetone".to_string(),
+                formula: "C3H6O".to_string(),
+                smiles: Some("CC(=O)C".to_string()),
+                molar_mass_g_mol: 58.08,
+                phase_default: "liquid".to_string(),
+                source_type: "imported".to_string(),
+            })
+            .expect("must create imported substance");
+
+        let error = delete_substance_v1_with_repository(
+            &DeleteSubstanceV1Input {
+                id: Some("imported-test-substance".to_string()),
+            },
+            &repository,
+            "req-delete-imported",
+        )
+        .expect_err("imported substance delete must be rejected");
+
+        assert_eq!(error.category, ErrorCategory::Validation);
+        assert_eq!(error.code, "SUBSTANCE_SOURCE_IMMUTABLE");
+    }
+
+    #[test]
+    fn delete_substance_v1_rejects_substances_used_in_scenarios() {
+        let (_temp_dir, repository) = setup_repository("delete-in-use.sqlite3");
+        repository
+            .create_substance(&NewSubstance {
+                id: "user-in-use-substance".to_string(),
+                name: "In-use custom".to_string(),
+                formula: "IU1".to_string(),
+                smiles: None,
+                molar_mass_g_mol: 10.0,
+                phase_default: "solid".to_string(),
+                source_type: "user_defined".to_string(),
+            })
+            .expect("must create user-defined substance");
+        repository
+            .create_scenario_run(&NewScenarioRun {
+                id: "scenario-run-in-use".to_string(),
+                reaction_template_id: None,
+                name: "Scenario with in-use substance".to_string(),
+                temperature_k: 298.15,
+                pressure_pa: 101_325.0,
+                gas_medium: "air".to_string(),
+                precision_profile: "balanced".to_string(),
+                fps_limit: 60,
+                particle_limit: 5_000,
+            })
+            .expect("must create scenario run");
+
+        let connection = Connection::open(repository.database_path()).expect("must open database");
+        connection
+            .execute(
+                "INSERT INTO scenario_amount(
+                    id,
+                    scenario_run_id,
+                    substance_id,
+                    amount_mol,
+                    mass_g,
+                    volume_l,
+                    concentration_mol_l
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    "scenario-amount-in-use",
+                    "scenario-run-in-use",
+                    "user-in-use-substance",
+                    1.5_f64,
+                    Option::<f64>::None,
+                    Option::<f64>::None,
+                    Option::<f64>::None
+                ],
+            )
+            .expect("must insert scenario amount");
+
+        let error = delete_substance_v1_with_repository(
+            &DeleteSubstanceV1Input {
+                id: Some("user-in-use-substance".to_string()),
+            },
+            &repository,
+            "req-delete-in-use",
+        )
+        .expect_err("in-use substance delete must be rejected");
+
+        assert_eq!(error.category, ErrorCategory::Validation);
+        assert_eq!(error.code, "SUBSTANCE_IN_USE");
+    }
+
+    #[test]
+    fn user_substance_crud_happy_path_succeeds() {
+        let (_temp_dir, repository) = setup_repository("crud-happy.sqlite3");
+        let create_output = create_substance_v1_with_repository(
+            &CreateSubstanceV1Input {
+                name: Some("Custom methane".to_string()),
+                formula: Some("CH4".to_string()),
+                smiles: Some("C".to_string()),
+                molar_mass_g_mol: Some(16.0425),
+                phase: Some("gas".to_string()),
+            },
+            &repository,
+            "req-crud-create",
+        )
+        .expect("must create user-defined substance");
+        assert_eq!(create_output.substance.source, "user");
+        assert_eq!(create_output.substance.phase, "gas");
+
+        let update_output = update_substance_v1_with_repository(
+            &UpdateSubstanceV1Input {
+                id: Some(create_output.substance.id.clone()),
+                name: Some("Custom methane updated".to_string()),
+                formula: Some("CH4".to_string()),
+                smiles: Some("C".to_string()),
+                molar_mass_g_mol: Some(16.1),
+                phase: Some("liquid".to_string()),
+            },
+            &repository,
+            "req-crud-update",
+        )
+        .expect("must update user-defined substance");
+        assert_eq!(update_output.substance.name, "Custom methane updated");
+        assert_eq!(update_output.substance.phase, "liquid");
+        assert_eq!(update_output.substance.source, "user");
+
+        let delete_output = delete_substance_v1_with_repository(
+            &DeleteSubstanceV1Input {
+                id: Some(update_output.substance.id.clone()),
+            },
+            &repository,
+            "req-crud-delete",
+        )
+        .expect("must delete user-defined substance");
+        assert!(delete_output.deleted);
+        assert!(repository
+            .get_substance(&update_output.substance.id)
+            .expect("must query deleted substance")
+            .is_none());
+    }
+
+    #[test]
+    fn create_substance_v1_rejects_duplicate_name_formula_pairs() {
+        let (_temp_dir, repository) = setup_repository("create-duplicate.sqlite3");
+        create_substance_v1_with_repository(
+            &CreateSubstanceV1Input {
+                name: Some("Acetic acid".to_string()),
+                formula: Some("C2H4O2".to_string()),
+                smiles: Some("CC(=O)O".to_string()),
+                molar_mass_g_mol: Some(60.052),
+                phase: Some("liquid".to_string()),
+            },
+            &repository,
+            "req-create-dup-1",
+        )
+        .expect("must create first custom substance");
+
+        let error = create_substance_v1_with_repository(
+            &CreateSubstanceV1Input {
+                name: Some("Acetic acid".to_string()),
+                formula: Some("C2H4O2".to_string()),
+                smiles: Some("CC(=O)O".to_string()),
+                molar_mass_g_mol: Some(60.052),
+                phase: Some("liquid".to_string()),
+            },
+            &repository,
+            "req-create-dup-2",
+        )
+        .expect_err("duplicate name+formula should fail");
+
+        assert_eq!(error.category, ErrorCategory::Validation);
+        assert_eq!(error.code, "SUBSTANCE_DUPLICATE");
     }
 
     #[test]

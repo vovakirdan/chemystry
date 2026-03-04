@@ -582,6 +582,81 @@ button.left-panel-library-item-button[aria-selected="true"] {
   font-weight: 600;
 }
 
+.left-panel-library-crud {
+  border-top: 1px dashed var(--color-border-subtle);
+  padding-top: 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.left-panel-library-form {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: #f9fcff;
+  padding: 0.5rem 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.left-panel-library-form-title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.left-panel-library-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.left-panel-library-form-errors {
+  margin: 0;
+  padding-left: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  color: var(--color-error);
+  font-size: var(--font-size-xs);
+}
+
+.left-panel-library-edit-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.left-panel-library-readonly {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+button.left-panel-library-delete-button {
+  align-self: flex-start;
+  border-color: #a33f3c;
+  background: #b54b47;
+}
+
+button.left-panel-library-delete-button:hover {
+  border-color: #8f3330;
+  background: #9b3a36;
+}
+
+.left-panel-library-mutation-error {
+  margin: 0;
+  border: 1px solid #e0b0ae;
+  border-radius: var(--radius-sm);
+  background: var(--color-error-soft);
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+  padding: 0.42rem 0.5rem;
+}
+
 .left-panel-placeholder {
   display: flex;
   flex-direction: column;
@@ -892,6 +967,11 @@ kbd {
 
   .left-panel-library-filter-row {
     grid-template-columns: 1fr;
+  }
+
+  button.left-panel-library-delete-button {
+    align-self: stretch;
+    width: 100%;
   }
 
   .notification-center {

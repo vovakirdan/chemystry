@@ -10,6 +10,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import {
+  createSubstanceV1,
+  deleteSubstanceV1,
   ensureFeatureEnabledV1,
   getFeatureFlagsV1,
   greetV1,
@@ -19,6 +21,7 @@ import {
   normalizeCommandErrorV1,
   resolveFeatureFlagsV1,
   toUserFacingMessageV1,
+  updateSubstanceV1,
 } from "./client";
 import { IPC_COMMANDS_V1, IPC_CONTRACT_VERSION_V1, type CommandErrorV1 } from "./v1";
 
@@ -202,6 +205,153 @@ describe("ipc v1 client", () => {
     await expect(listSubstancesV1()).rejects.toMatchObject({
       version: IPC_CONTRACT_VERSION_V1,
       requestId: "req-library-invalid",
+      category: "internal",
+      code: "INVALID_SUBSTANCE_PAYLOAD",
+    });
+  });
+
+  it("invokes create_substance_v1 with { input } and parses returned substance payload", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-create-substance",
+      substance: {
+        id: "user-substance-ethanol",
+        name: "Ethanol",
+        formula: "C2H6O",
+        phase_default: "liquid",
+        source_type: "user_defined",
+        molar_mass_g_mol: "46.06844",
+      },
+    });
+
+    await expect(
+      createSubstanceV1({
+        name: "Ethanol",
+        formula: "C2H6O",
+        phase: "liquid",
+        molarMassGMol: 46.06844,
+      }),
+    ).resolves.toEqual({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-create-substance",
+      substance: {
+        id: "user-substance-ethanol",
+        name: "Ethanol",
+        formula: "C2H6O",
+        phase: "liquid",
+        source: "user",
+        molarMassGMol: 46.06844,
+      },
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith(IPC_COMMANDS_V1.createSubstance, {
+      input: {
+        name: "Ethanol",
+        formula: "C2H6O",
+        phase: "liquid",
+        molarMassGMol: 46.06844,
+      },
+    });
+  });
+
+  it("rejects create_substance_v1 payloads with invalid response shape", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-create-invalid",
+      substance: null,
+    });
+
+    await expect(
+      createSubstanceV1({
+        name: "Broken",
+        formula: "Br",
+        phase: "solid",
+        molarMassGMol: 1,
+      }),
+    ).rejects.toMatchObject({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-create-invalid",
+      category: "internal",
+      code: "INVALID_SUBSTANCE_PAYLOAD",
+    });
+  });
+
+  it("invokes update_substance_v1 with { input } and parses returned substance payload", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-update-substance",
+      substance: {
+        id: "user-substance-ethanol",
+        name: "Ethanol (Updated)",
+        formula: "C2H6O",
+        phase: "liquid",
+        source: "user",
+        molarMassGMol: 46.06844,
+      },
+    });
+
+    await expect(
+      updateSubstanceV1({
+        id: "user-substance-ethanol",
+        name: "Ethanol (Updated)",
+        formula: "C2H6O",
+        phase: "liquid",
+        molarMassGMol: 46.06844,
+      }),
+    ).resolves.toEqual({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-update-substance",
+      substance: {
+        id: "user-substance-ethanol",
+        name: "Ethanol (Updated)",
+        formula: "C2H6O",
+        phase: "liquid",
+        source: "user",
+        molarMassGMol: 46.06844,
+      },
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith(IPC_COMMANDS_V1.updateSubstance, {
+      input: {
+        id: "user-substance-ethanol",
+        name: "Ethanol (Updated)",
+        formula: "C2H6O",
+        phase: "liquid",
+        molarMassGMol: 46.06844,
+      },
+    });
+  });
+
+  it("invokes delete_substance_v1 with { input } and validates deleted flag", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-delete-substance",
+      deleted: true,
+    });
+
+    await expect(deleteSubstanceV1({ id: "user-substance-ethanol" })).resolves.toEqual({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-delete-substance",
+      deleted: true,
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith(IPC_COMMANDS_V1.deleteSubstance, {
+      input: {
+        id: "user-substance-ethanol",
+      },
+    });
+  });
+
+  it("rejects delete_substance_v1 payloads with invalid deleted flag", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-delete-invalid",
+      deleted: "yes",
+    });
+
+    await expect(deleteSubstanceV1({ id: "user-substance-ethanol" })).rejects.toMatchObject({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-delete-invalid",
       category: "internal",
       code: "INVALID_SUBSTANCE_PAYLOAD",
     });

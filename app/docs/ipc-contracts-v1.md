@@ -65,6 +65,64 @@ This document defines the baseline versioned IPC contracts shared by frontend an
 }
 ```
 
+### `CreateSubstanceV1Input`
+
+```json
+{
+  "name": "string (required, trimmed)",
+  "formula": "string (required, trimmed)",
+  "phase": "solid | liquid | gas | aqueous",
+  "molarMassGMol": "number (required, > 0)"
+}
+```
+
+### `UpdateSubstanceV1Input`
+
+```json
+{
+  "id": "string",
+  "name": "string (required, trimmed)",
+  "formula": "string (required, trimmed)",
+  "phase": "solid | liquid | gas | aqueous",
+  "molarMassGMol": "number (required, > 0)"
+}
+```
+
+### `DeleteSubstanceV1Input`
+
+```json
+{
+  "id": "string"
+}
+```
+
+### `SubstanceMutationV1Output`
+
+```json
+{
+  "version": "v1",
+  "requestId": "string",
+  "substance": {
+    "id": "string",
+    "name": "string",
+    "formula": "string",
+    "phase": "solid | liquid | gas | aqueous",
+    "source": "builtin | imported | user",
+    "molarMassGMol": "number | null"
+  }
+}
+```
+
+### `DeleteSubstanceV1Output`
+
+```json
+{
+  "version": "v1",
+  "requestId": "string",
+  "deleted": "boolean"
+}
+```
+
 ## Command Table
 
 | Command | Input schema | Output schema | Error schema |
@@ -72,6 +130,10 @@ This document defines the baseline versioned IPC contracts shared by frontend an
 | `greet_v1` | `GreetV1Input` | `GreetV1Output` | `CommandErrorV1` |
 | `health_v1` | `{}` (no input payload) | `HealthV1Output` | `CommandErrorV1` (reserved for future failures) |
 | `get_feature_flags_v1` | `{}` (no input payload) | `GetFeatureFlagsV1Output` | `CommandErrorV1` (reserved for future failures) |
+| `query_substances_v1` | `{}` (or filter object in future) | `{ version, requestId, substances[] }` | `CommandErrorV1` |
+| `create_substance_v1` | `CreateSubstanceV1Input` | `SubstanceMutationV1Output` | `CommandErrorV1` |
+| `update_substance_v1` | `UpdateSubstanceV1Input` | `SubstanceMutationV1Output` | `CommandErrorV1` |
+| `delete_substance_v1` | `DeleteSubstanceV1Input` | `DeleteSubstanceV1Output` | `CommandErrorV1` |
 
 ## Validation Baseline (Rust Side)
 

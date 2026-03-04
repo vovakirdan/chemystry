@@ -335,6 +335,19 @@ impl StorageRepository {
         Ok(affected_rows > 0)
     }
 
+    pub fn count_substance_scenario_usage(&self, id: &str) -> Result<u64, StorageError> {
+        let connection = self.open()?;
+        let usage_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(1) FROM scenario_amount WHERE substance_id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(|error| self.sqlite_error("failed to count scenario_amount usage", error))?;
+
+        Ok(usage_count.max(0) as u64)
+    }
+
     pub fn create_reaction_template(
         &self,
         input: &NewReactionTemplate,
@@ -1493,6 +1506,76 @@ mod tests {
         assert!(repository
             .delete_substance("substance-test-1")
             .expect("substance delete should succeed"));
+    }
+
+    #[test]
+    fn count_substance_scenario_usage_tracks_references() {
+        let temp_dir = TempDir::new().expect("must create temp directory");
+        let database_path = temp_dir.path().join("scenario-usage.sqlite3");
+
+        run_migrations(&database_path).expect("migrations should succeed");
+        let repository = StorageRepository::new(database_path.clone());
+
+        repository
+            .create_substance(&NewSubstance {
+                id: "substance-usage-target".to_string(),
+                name: "Usage target".to_string(),
+                formula: "U1".to_string(),
+                smiles: None,
+                molar_mass_g_mol: 11.0,
+                phase_default: "solid".to_string(),
+                source_type: "user_defined".to_string(),
+            })
+            .expect("must create usage target substance");
+
+        repository
+            .create_scenario_run(&NewScenarioRun {
+                id: "scenario-run-usage-1".to_string(),
+                reaction_template_id: None,
+                name: "Usage scenario".to_string(),
+                temperature_k: 298.15,
+                pressure_pa: 101_325.0,
+                gas_medium: "air".to_string(),
+                precision_profile: "balanced".to_string(),
+                fps_limit: 60,
+                particle_limit: 10_000,
+            })
+            .expect("must create scenario run");
+
+        let connection = Connection::open(database_path).expect("must open sqlite database");
+        connection
+            .execute(
+                "INSERT INTO scenario_amount(
+                    id,
+                    scenario_run_id,
+                    substance_id,
+                    amount_mol,
+                    mass_g,
+                    volume_l,
+                    concentration_mol_l
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    "scenario-amount-usage-1",
+                    "scenario-run-usage-1",
+                    "substance-usage-target",
+                    0.25_f64,
+                    Option::<f64>::None,
+                    Option::<f64>::None,
+                    Option::<f64>::None
+                ],
+            )
+            .expect("must insert scenario amount");
+
+        let usage_count = repository
+            .count_substance_scenario_usage("substance-usage-target")
+            .expect("must count scenario usage");
+        assert_eq!(usage_count, 1);
+        assert_eq!(
+            repository
+                .count_substance_scenario_usage("substance-usage-missing")
+                .expect("must count missing scenario usage"),
+            0
+        );
     }
 
     #[test]

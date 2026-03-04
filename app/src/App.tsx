@@ -8,13 +8,19 @@ import CenterPanelSkeleton, {
 import LeftPanelSkeleton from "./features/left-panel/LeftPanelSkeleton";
 import {
   DEFAULT_LEFT_PANEL_TAB,
+  DEFAULT_USER_SUBSTANCE_DRAFT,
   LIBRARY_PHASE_FILTER_OPTIONS,
   LIBRARY_SOURCE_FILTER_OPTIONS,
+  createUserSubstanceDraftFromCatalogEntry,
   filterLibrarySubstances,
+  isUserSubstanceEditable,
   isLeftPanelTabId,
   resolveSelectedLibrarySubstanceId,
+  validateUserSubstanceDraft,
   type LeftPanelPlaceholderState,
   type LeftPanelTabId,
+  type UserSubstanceDraft,
+  type UserSubstanceDraftField,
 } from "./features/left-panel/model";
 import RightPanelSkeleton, {
   type RightPanelFeatureStatus,
@@ -25,6 +31,8 @@ import StatusBar from "./shared/components/StatusBar";
 import type { FeatureFlagKey, FeatureFlags } from "./shared/config/featureFlags";
 import { DEFAULT_FEATURE_FLAGS } from "./shared/config/featureFlags";
 import {
+  createSubstanceV1,
+  deleteSubstanceV1,
   ensureFeatureEnabledV1,
   greetV1,
   healthV1,
@@ -32,6 +40,7 @@ import {
   listSubstancesV1,
   resolveFeatureFlagsV1,
   toUserFacingMessageV1,
+  updateSubstanceV1,
 } from "./shared/contracts/ipc/client";
 import type {
   CommandErrorV1,
@@ -149,6 +158,66 @@ function toggleFilterValue<T extends string>(
   return nextSelection;
 }
 
+function createDefaultUserSubstanceDraft(): UserSubstanceDraft {
+  return {
+    ...DEFAULT_USER_SUBSTANCE_DRAFT,
+  };
+}
+
+function updateUserSubstanceDraftField(
+  draft: UserSubstanceDraft,
+  field: UserSubstanceDraftField,
+  value: string,
+): UserSubstanceDraft {
+  switch (field) {
+    case "name":
+      return {
+        ...draft,
+        name: value,
+      };
+    case "formula":
+      return {
+        ...draft,
+        formula: value,
+      };
+    case "phase":
+      if (LIBRARY_PHASE_FILTER_OPTIONS.includes(value as SubstancePhaseV1)) {
+        return {
+          ...draft,
+          phase: value as SubstancePhaseV1,
+        };
+      }
+      return draft;
+    case "molarMassInput":
+      return {
+        ...draft,
+        molarMassInput: value,
+      };
+    default:
+      return draft;
+  }
+}
+
+function sortSubstancesByName(
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): ReadonlyArray<SubstanceCatalogEntryV1> {
+  return [...substances].sort((left, right) => {
+    const nameOrder = left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
+    if (nameOrder !== 0) {
+      return nameOrder;
+    }
+
+    const formulaOrder = left.formula.localeCompare(right.formula, undefined, {
+      sensitivity: "base",
+    });
+    if (formulaOrder !== 0) {
+      return formulaOrder;
+    }
+
+    return left.id.localeCompare(right.id, undefined, { sensitivity: "base" });
+  });
+}
+
 function App() {
   const [activeLeftPanelTab, setActiveLeftPanelTab] =
     useState<LeftPanelTabId>(readStoredLeftPanelTab);
@@ -176,6 +245,20 @@ function App() {
     "loading",
   );
   const [libraryLoadError, setLibraryLoadError] = useState<string | null>(null);
+  const [createSubstanceDraft, setCreateSubstanceDraft] = useState<UserSubstanceDraft>(
+    createDefaultUserSubstanceDraft,
+  );
+  const [createSubstanceValidationErrors, setCreateSubstanceValidationErrors] = useState<
+    ReadonlyArray<string>
+  >([]);
+  const [editSubstanceDraft, setEditSubstanceDraft] = useState<UserSubstanceDraft | null>(null);
+  const [editSubstanceValidationErrors, setEditSubstanceValidationErrors] = useState<
+    ReadonlyArray<string>
+  >([]);
+  const [libraryMutationState, setLibraryMutationState] = useState<
+    "idle" | "creating" | "updating" | "deleting"
+  >("idle");
+  const [libraryMutationError, setLibraryMutationError] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<ReadonlyArray<AppNotification>>([]);
   const notificationIdRef = useRef(0);
   const previousSimulationStateRef = useRef<string | null>(null);
@@ -401,6 +484,24 @@ function App() {
     [filteredLibrarySubstances, resolvedSelectedLibrarySubstanceId],
   );
 
+  const selectedEditableLibrarySubstance = useMemo(
+    () => (isUserSubstanceEditable(selectedLibrarySubstance) ? selectedLibrarySubstance : null),
+    [selectedLibrarySubstance],
+  );
+
+  useEffect(() => {
+    if (selectedEditableLibrarySubstance === null) {
+      setEditSubstanceDraft(null);
+      setEditSubstanceValidationErrors([]);
+      return;
+    }
+
+    setEditSubstanceDraft(
+      createUserSubstanceDraftFromCatalogEntry(selectedEditableLibrarySubstance),
+    );
+    setEditSubstanceValidationErrors([]);
+  }, [selectedEditableLibrarySubstance]);
+
   const libraryPlaceholderState: LeftPanelPlaceholderState = useMemo(() => {
     if (libraryLoadState === "loading") {
       return "loading";
@@ -434,6 +535,152 @@ function App() {
   const handleLibrarySourceToggle = useCallback((source: SubstanceSourceV1): void => {
     setSelectedLibrarySources((currentSelection) => toggleFilterValue(currentSelection, source));
   }, []);
+
+  const handleCreateSubstanceDraftFieldChange = useCallback(
+    (field: UserSubstanceDraftField, value: string): void => {
+      setCreateSubstanceDraft((currentDraft) =>
+        updateUserSubstanceDraftField(currentDraft, field, value),
+      );
+      setCreateSubstanceValidationErrors((currentErrors) =>
+        currentErrors.length === 0 ? currentErrors : [],
+      );
+      setLibraryMutationError((currentError) => (currentError === null ? currentError : null));
+    },
+    [],
+  );
+
+  const handleEditSubstanceDraftFieldChange = useCallback(
+    (field: UserSubstanceDraftField, value: string): void => {
+      setEditSubstanceDraft((currentDraft) => {
+        if (currentDraft === null) {
+          return currentDraft;
+        }
+
+        return updateUserSubstanceDraftField(currentDraft, field, value);
+      });
+      setEditSubstanceValidationErrors((currentErrors) =>
+        currentErrors.length === 0 ? currentErrors : [],
+      );
+      setLibraryMutationError((currentError) => (currentError === null ? currentError : null));
+    },
+    [],
+  );
+
+  const handleCreateSubstanceSubmit = useCallback(async (): Promise<void> => {
+    const validationResult = validateUserSubstanceDraft(createSubstanceDraft);
+    if (validationResult.input === null) {
+      setCreateSubstanceValidationErrors(validationResult.errors);
+      return;
+    }
+
+    setCreateSubstanceValidationErrors([]);
+    setLibraryMutationError(null);
+    setLibraryMutationState("creating");
+
+    try {
+      const result = await createSubstanceV1(validationResult.input);
+      setAllSubstances((currentSubstances) =>
+        sortSubstancesByName([
+          ...currentSubstances.filter((substance) => substance.id !== result.substance.id),
+          result.substance,
+        ]),
+      );
+      setCreateSubstanceDraft(createDefaultUserSubstanceDraft());
+      setSelectedLibrarySubstanceId(result.substance.id);
+      enqueueNotification("info", `Substance "${result.substance.name}" was created.`);
+    } catch (error: unknown) {
+      const message = isCommandErrorV1(error)
+        ? `Create substance error: ${formatCommandError(error)}`
+        : `Create substance error: ${String(error)}`;
+      setLibraryMutationError(message);
+      enqueueNotification("error", message);
+    } finally {
+      setLibraryMutationState("idle");
+    }
+  }, [createSubstanceDraft, enqueueNotification]);
+
+  const handleUpdateSubstanceSubmit = useCallback(async (): Promise<void> => {
+    if (selectedEditableLibrarySubstance === null || editSubstanceDraft === null) {
+      setLibraryMutationError("Select a user substance before saving edits.");
+      return;
+    }
+
+    const validationResult = validateUserSubstanceDraft(editSubstanceDraft);
+    if (validationResult.input === null) {
+      setEditSubstanceValidationErrors(validationResult.errors);
+      return;
+    }
+
+    setEditSubstanceValidationErrors([]);
+    setLibraryMutationError(null);
+    setLibraryMutationState("updating");
+
+    try {
+      const result = await updateSubstanceV1({
+        id: selectedEditableLibrarySubstance.id,
+        ...validationResult.input,
+      });
+      setAllSubstances((currentSubstances) =>
+        sortSubstancesByName(
+          currentSubstances.map((substance) =>
+            substance.id === result.substance.id ? result.substance : substance,
+          ),
+        ),
+      );
+      setEditSubstanceDraft(createUserSubstanceDraftFromCatalogEntry(result.substance));
+      setSelectedLibrarySubstanceId(result.substance.id);
+      enqueueNotification("info", `Substance "${result.substance.name}" was updated.`);
+    } catch (error: unknown) {
+      const message = isCommandErrorV1(error)
+        ? `Update substance error: ${formatCommandError(error)}`
+        : `Update substance error: ${String(error)}`;
+      setLibraryMutationError(message);
+      enqueueNotification("error", message);
+    } finally {
+      setLibraryMutationState("idle");
+    }
+  }, [editSubstanceDraft, enqueueNotification, selectedEditableLibrarySubstance]);
+
+  const handleDeleteSelectedSubstance = useCallback(async (): Promise<void> => {
+    if (selectedEditableLibrarySubstance === null) {
+      setLibraryMutationError("Select a user substance before deleting.");
+      return;
+    }
+
+    setLibraryMutationError(null);
+    setLibraryMutationState("deleting");
+
+    try {
+      const result = await deleteSubstanceV1({ id: selectedEditableLibrarySubstance.id });
+      if (!result.deleted) {
+        const message = `Substance "${selectedEditableLibrarySubstance.name}" was not deleted.`;
+        setLibraryMutationError(message);
+        enqueueNotification("warn", message);
+        return;
+      }
+
+      setAllSubstances((currentSubstances) =>
+        currentSubstances.filter(
+          (substance) => substance.id !== selectedEditableLibrarySubstance.id,
+        ),
+      );
+      setSelectedLibrarySubstanceId(null);
+      setEditSubstanceValidationErrors([]);
+      setEditSubstanceDraft(null);
+      enqueueNotification(
+        "info",
+        `Substance "${selectedEditableLibrarySubstance.name}" was deleted.`,
+      );
+    } catch (error: unknown) {
+      const message = isCommandErrorV1(error)
+        ? `Delete substance error: ${formatCommandError(error)}`
+        : `Delete substance error: ${String(error)}`;
+      setLibraryMutationError(message);
+      enqueueNotification("error", message);
+    } finally {
+      setLibraryMutationState("idle");
+    }
+  }, [enqueueNotification, selectedEditableLibrarySubstance]);
 
   const rightPanelFeatureStatuses: ReadonlyArray<RightPanelFeatureStatus> = FEATURE_KEYS.map(
     (feature) => ({
@@ -470,6 +717,23 @@ function App() {
               substances: filteredLibrarySubstances,
               selectedSubstance: selectedLibrarySubstance,
               onSelectSubstance: setSelectedLibrarySubstanceId,
+              createDraft: createSubstanceDraft,
+              createValidationErrors: createSubstanceValidationErrors,
+              onCreateDraftFieldChange: handleCreateSubstanceDraftFieldChange,
+              onCreateSubmit: () => {
+                void handleCreateSubstanceSubmit();
+              },
+              editDraft: editSubstanceDraft,
+              editValidationErrors: editSubstanceValidationErrors,
+              onEditDraftFieldChange: handleEditSubstanceDraftFieldChange,
+              onEditSubmit: () => {
+                void handleUpdateSubstanceSubmit();
+              },
+              onDeleteSelected: () => {
+                void handleDeleteSelectedSubstance();
+              },
+              isMutating: libraryMutationState !== "idle",
+              mutationErrorMessage: libraryMutationError,
               emptyMessage: libraryEmptyMessage,
               errorMessage: libraryLoadError,
             }}

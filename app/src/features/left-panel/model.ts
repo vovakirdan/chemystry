@@ -24,6 +24,34 @@ export const LIBRARY_SOURCE_FILTER_OPTIONS: ReadonlyArray<SubstanceSourceV1> = [
   "user",
 ];
 
+export interface UserSubstanceDraft {
+  name: string;
+  formula: string;
+  phase: SubstancePhaseV1;
+  molarMassInput: string;
+}
+
+export type UserSubstanceDraftField = keyof UserSubstanceDraft;
+
+export interface UserSubstanceFormInput {
+  name: string;
+  formula: string;
+  phase: SubstancePhaseV1;
+  molarMassGMol: number;
+}
+
+export interface UserSubstanceDraftValidationResult {
+  errors: ReadonlyArray<string>;
+  input: UserSubstanceFormInput | null;
+}
+
+export const DEFAULT_USER_SUBSTANCE_DRAFT: Readonly<UserSubstanceDraft> = {
+  name: "",
+  formula: "",
+  phase: "solid",
+  molarMassInput: "",
+};
+
 const LIBRARY_PHASE_LABEL_BY_VALUE: Record<SubstancePhaseV1, string> = {
   solid: "Solid",
   liquid: "Liquid",
@@ -39,6 +67,79 @@ const LIBRARY_SOURCE_LABEL_BY_VALUE: Record<SubstanceSourceV1, string> = {
 
 export const isLeftPanelTabId = (value: string): value is LeftPanelTabId =>
   LEFT_PANEL_TAB_IDS.includes(value as LeftPanelTabId);
+
+export function isUserSubstanceEditable(substance: SubstanceCatalogEntryV1 | null): boolean {
+  return substance !== null && substance.source === "user";
+}
+
+export function createUserSubstanceDraftFromCatalogEntry(
+  substance: SubstanceCatalogEntryV1,
+): UserSubstanceDraft {
+  return {
+    name: substance.name,
+    formula: substance.formula,
+    phase: substance.phase,
+    molarMassInput:
+      substance.molarMassGMol === null ? "" : String(Number(substance.molarMassGMol.toFixed(5))),
+  };
+}
+
+export function validateUserSubstanceDraft(
+  draft: UserSubstanceDraft,
+): UserSubstanceDraftValidationResult {
+  const errors: string[] = [];
+  const normalizedName = draft.name.trim();
+  const normalizedFormula = draft.formula.trim();
+
+  if (normalizedName.length === 0) {
+    errors.push("Name is required.");
+  }
+
+  if (normalizedFormula.length === 0) {
+    errors.push("Formula is required.");
+  }
+
+  if (!LIBRARY_PHASE_FILTER_OPTIONS.includes(draft.phase)) {
+    errors.push("Phase must be one of: solid, liquid, gas, aqueous.");
+  }
+
+  const molarMassText = draft.molarMassInput.trim();
+  let molarMassGMol: number | null = null;
+  if (molarMassText.length === 0) {
+    errors.push("Molar mass is required.");
+  } else {
+    const parsedMolarMass = Number(molarMassText);
+    if (!Number.isFinite(parsedMolarMass) || parsedMolarMass <= 0) {
+      errors.push("Molar mass must be a positive number.");
+    } else {
+      molarMassGMol = parsedMolarMass;
+    }
+  }
+
+  if (errors.length > 0) {
+    return {
+      errors,
+      input: null,
+    };
+  }
+
+  if (molarMassGMol === null) {
+    return {
+      errors: ["Molar mass is required."],
+      input: null,
+    };
+  }
+
+  return {
+    errors: [],
+    input: {
+      name: normalizedName,
+      formula: normalizedFormula,
+      phase: draft.phase,
+      molarMassGMol,
+    },
+  };
+}
 
 export function normalizeLibrarySearchQuery(value: string): string {
   return value.trim().toLowerCase();
