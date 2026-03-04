@@ -1,4 +1,6 @@
 import type {
+  PresetCatalogEntryV1,
+  ReactionClassV1,
   SubstanceCatalogEntryV1,
   SubstancePhaseV1,
   SubstanceSourceV1,
@@ -33,6 +35,15 @@ export interface UserSubstanceDraft {
 
 export type UserSubstanceDraftField = keyof UserSubstanceDraft;
 
+export interface BuilderDraft {
+  title: string;
+  reactionClass: ReactionClassV1;
+  equation: string;
+  description: string;
+}
+
+export type BuilderDraftField = keyof BuilderDraft;
+
 export interface UserSubstanceFormInput {
   name: string;
   formula: string;
@@ -52,6 +63,13 @@ export const DEFAULT_USER_SUBSTANCE_DRAFT: Readonly<UserSubstanceDraft> = {
   molarMassInput: "",
 };
 
+export const DEFAULT_BUILDER_DRAFT: Readonly<BuilderDraft> = {
+  title: "",
+  reactionClass: "inorganic",
+  equation: "",
+  description: "",
+};
+
 const LIBRARY_PHASE_LABEL_BY_VALUE: Record<SubstancePhaseV1, string> = {
   solid: "Solid",
   liquid: "Liquid",
@@ -63,6 +81,14 @@ const LIBRARY_SOURCE_LABEL_BY_VALUE: Record<SubstanceSourceV1, string> = {
   builtin: "Builtin",
   imported: "Imported",
   user: "User",
+};
+
+const REACTION_CLASS_LABEL_BY_VALUE: Record<ReactionClassV1, string> = {
+  inorganic: "Inorganic",
+  acid_base: "Acid/Base",
+  redox: "Redox",
+  organic_basic: "Organic Basic",
+  equilibrium: "Equilibrium",
 };
 
 export const isLeftPanelTabId = (value: string): value is LeftPanelTabId =>
@@ -81,6 +107,37 @@ export function createUserSubstanceDraftFromCatalogEntry(
     phase: substance.phase,
     molarMassInput:
       substance.molarMassGMol === null ? "" : String(Number(substance.molarMassGMol.toFixed(5))),
+  };
+}
+
+export function createBuilderDraftFromPreset(preset: PresetCatalogEntryV1): BuilderDraft {
+  return {
+    title: preset.title,
+    reactionClass: preset.reactionClass,
+    equation: preset.equation,
+    description: preset.description,
+  };
+}
+
+export function updateBuilderDraftField(
+  draft: BuilderDraft,
+  field: BuilderDraftField,
+  value: string,
+): BuilderDraft {
+  if (field === "reactionClass") {
+    if (!(value in REACTION_CLASS_LABEL_BY_VALUE)) {
+      return draft;
+    }
+
+    return {
+      ...draft,
+      reactionClass: value as ReactionClassV1,
+    };
+  }
+
+  return {
+    ...draft,
+    [field]: value,
   };
 }
 
@@ -191,10 +248,38 @@ export function resolveSelectedLibrarySubstanceId(
   return visibleSubstances[0].id;
 }
 
+export function resolveSelectedPresetId(
+  currentSelectionId: string | null,
+  presets: ReadonlyArray<PresetCatalogEntryV1>,
+): string | null {
+  if (presets.length === 0) {
+    return null;
+  }
+
+  if (currentSelectionId !== null && presets.some((preset) => preset.id === currentSelectionId)) {
+    return currentSelectionId;
+  }
+
+  return presets[0].id;
+}
+
 export function formatLibraryPhaseLabel(value: SubstancePhaseV1): string {
   return LIBRARY_PHASE_LABEL_BY_VALUE[value];
 }
 
 export function formatLibrarySourceLabel(value: SubstanceSourceV1): string {
   return LIBRARY_SOURCE_LABEL_BY_VALUE[value];
+}
+
+export function formatReactionClassLabel(value: ReactionClassV1): string {
+  return REACTION_CLASS_LABEL_BY_VALUE[value];
+}
+
+export function formatPresetComplexityLabel(value: string): string {
+  return value
+    .trim()
+    .split(/[\s_-]+/u)
+    .filter((token) => token.length > 0)
+    .map((token) => `${token[0].toUpperCase()}${token.slice(1).toLowerCase()}`)
+    .join(" ");
 }

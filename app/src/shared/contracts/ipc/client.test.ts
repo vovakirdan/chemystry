@@ -17,6 +17,7 @@ import {
   greetV1,
   healthV1,
   isCommandErrorV1,
+  listPresetsV1,
   listSubstancesV1,
   normalizeCommandErrorV1,
   resolveFeatureFlagsV1,
@@ -207,6 +208,66 @@ describe("ipc v1 client", () => {
       requestId: "req-library-invalid",
       category: "internal",
       code: "INVALID_SUBSTANCE_PAYLOAD",
+    });
+  });
+
+  it("invokes list_presets_v1 with empty input and parses preset metadata", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-presets",
+      presets: [
+        {
+          id: "builtin-preset-hydrogen-combustion-v1",
+          title: "Hydrogen combustion",
+          reaction_class: "redox",
+          equation_balanced: "2H2 + O2 -> 2H2O",
+          complexity: "intro",
+          description: "Preset combustion template for hydrogen oxidation.",
+        },
+      ],
+    });
+
+    await expect(listPresetsV1()).resolves.toEqual({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-presets",
+      presets: [
+        {
+          id: "builtin-preset-hydrogen-combustion-v1",
+          title: "Hydrogen combustion",
+          reactionClass: "redox",
+          equation: "2H2 + O2 -> 2H2O",
+          complexity: "intro",
+          description: "Preset combustion template for hydrogen oxidation.",
+        },
+      ],
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith(IPC_COMMANDS_V1.listPresets, {
+      input: {},
+    });
+  });
+
+  it("rejects list_presets_v1 payloads with invalid reaction class", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-presets-invalid",
+      presets: [
+        {
+          id: "broken-preset",
+          title: "Broken preset",
+          reactionClass: "nuclear",
+          equation: "X -> Y",
+          complexity: "intro",
+          description: "Broken payload.",
+        },
+      ],
+    });
+
+    await expect(listPresetsV1()).rejects.toMatchObject({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-presets-invalid",
+      category: "internal",
+      code: "INVALID_PRESET_PAYLOAD",
     });
   });
 

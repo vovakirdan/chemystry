@@ -7,6 +7,7 @@ export const IPC_COMMANDS_V1 = {
   health: "health_v1",
   getFeatureFlags: "get_feature_flags_v1",
   listSubstances: "query_substances_v1",
+  listPresets: "list_presets_v1",
   createSubstance: "create_substance_v1",
   updateSubstance: "update_substance_v1",
   deleteSubstance: "delete_substance_v1",
@@ -52,6 +53,28 @@ export interface SubstanceCatalogEntryV1 {
 
 export interface ListSubstancesV1Output extends RequestScopedPayloadV1 {
   substances: ReadonlyArray<SubstanceCatalogEntryV1>;
+}
+
+export const REACTION_CLASSES_V1 = [
+  "inorganic",
+  "acid_base",
+  "redox",
+  "organic_basic",
+  "equilibrium",
+] as const;
+export type ReactionClassV1 = (typeof REACTION_CLASSES_V1)[number];
+
+export interface PresetCatalogEntryV1 {
+  id: string;
+  title: string;
+  reactionClass: ReactionClassV1;
+  equation: string;
+  complexity: string;
+  description: string;
+}
+
+export interface ListPresetsV1Output extends RequestScopedPayloadV1 {
+  presets: ReadonlyArray<PresetCatalogEntryV1>;
 }
 
 export interface CreateSubstanceV1Input {

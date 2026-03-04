@@ -7,6 +7,7 @@ import CenterPanelSkeleton, {
 } from "./features/center-panel/CenterPanelSkeleton";
 import LeftPanelSkeleton from "./features/left-panel/LeftPanelSkeleton";
 import {
+  createBuilderDraftFromPreset,
   DEFAULT_LEFT_PANEL_TAB,
   DEFAULT_USER_SUBSTANCE_DRAFT,
   LIBRARY_PHASE_FILTER_OPTIONS,
@@ -15,8 +16,12 @@ import {
   filterLibrarySubstances,
   isUserSubstanceEditable,
   isLeftPanelTabId,
+  resolveSelectedPresetId,
   resolveSelectedLibrarySubstanceId,
+  updateBuilderDraftField,
   validateUserSubstanceDraft,
+  type BuilderDraft,
+  type BuilderDraftField,
   type LeftPanelPlaceholderState,
   type LeftPanelTabId,
   type UserSubstanceDraft,
@@ -37,6 +42,7 @@ import {
   greetV1,
   healthV1,
   isCommandErrorV1,
+  listPresetsV1,
   listSubstancesV1,
   resolveFeatureFlagsV1,
   toUserFacingMessageV1,
@@ -44,6 +50,7 @@ import {
 } from "./shared/contracts/ipc/client";
 import type {
   CommandErrorV1,
+  PresetCatalogEntryV1,
   SubstanceCatalogEntryV1,
   SubstancePhaseV1,
   SubstanceSourceV1,
@@ -74,14 +81,6 @@ const FEATURE_KEYS: ReadonlyArray<FeatureFlagKey> = [
 ];
 
 const LEFT_PANEL_ACTIVE_TAB_STORAGE_KEY = "chemystery.leftPanel.activeTab.v1";
-
-const LEFT_PANEL_STATIC_PLACEHOLDER_STATE_BY_TAB: Readonly<
-  Record<LeftPanelTabId, LeftPanelPlaceholderState>
-> = {
-  library: "ready",
-  builder: "empty",
-  presets: "error",
-};
 
 const DEFAULT_CENTER_PANEL_STATE: Readonly<CenterPanelControlState> = {
   isPlaying: false,
@@ -164,6 +163,10 @@ function createDefaultUserSubstanceDraft(): UserSubstanceDraft {
   };
 }
 
+function createBuilderCopyFeedbackMessage(presetTitle: string): string {
+  return `You are editing copy of preset "${presetTitle}". Original preset remains unchanged.`;
+}
+
 function updateUserSubstanceDraftField(
   draft: UserSubstanceDraft,
   field: UserSubstanceDraftField,
@@ -218,6 +221,19 @@ function sortSubstancesByName(
   });
 }
 
+function sortPresetsByTitle(
+  presets: ReadonlyArray<PresetCatalogEntryV1>,
+): ReadonlyArray<PresetCatalogEntryV1> {
+  return [...presets].sort((left, right) => {
+    const titleOrder = left.title.localeCompare(right.title, undefined, { sensitivity: "base" });
+    if (titleOrder !== 0) {
+      return titleOrder;
+    }
+
+    return left.id.localeCompare(right.id, undefined, { sensitivity: "base" });
+  });
+}
+
 function App() {
   const [activeLeftPanelTab, setActiveLeftPanelTab] =
     useState<LeftPanelTabId>(readStoredLeftPanelTab);
@@ -233,6 +249,7 @@ function App() {
   const [runtimeSettings, setRuntimeSettings] =
     useState<RightPanelRuntimeSettings>(DEFAULT_RUNTIME_SETTINGS);
   const [allSubstances, setAllSubstances] = useState<ReadonlyArray<SubstanceCatalogEntryV1>>([]);
+  const [allPresets, setAllPresets] = useState<ReadonlyArray<PresetCatalogEntryV1>>([]);
   const [librarySearchQuery, setLibrarySearchQuery] = useState("");
   const [selectedLibraryPhases, setSelectedLibraryPhases] = useState<ReadonlySet<SubstancePhaseV1>>(
     () => new Set(LIBRARY_PHASE_FILTER_OPTIONS),
@@ -241,10 +258,17 @@ function App() {
     ReadonlySet<SubstanceSourceV1>
   >(() => new Set(LIBRARY_SOURCE_FILTER_OPTIONS));
   const [selectedLibrarySubstanceId, setSelectedLibrarySubstanceId] = useState<string | null>(null);
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const [libraryLoadState, setLibraryLoadState] = useState<"loading" | "ready" | "error">(
     "loading",
   );
   const [libraryLoadError, setLibraryLoadError] = useState<string | null>(null);
+  const [presetsLoadState, setPresetsLoadState] = useState<"loading" | "ready" | "error">(
+    "loading",
+  );
+  const [presetsLoadError, setPresetsLoadError] = useState<string | null>(null);
+  const [builderDraft, setBuilderDraft] = useState<BuilderDraft | null>(null);
+  const [builderCopyFeedbackMessage, setBuilderCopyFeedbackMessage] = useState<string | null>(null);
   const [createSubstanceDraft, setCreateSubstanceDraft] = useState<UserSubstanceDraft>(
     createDefaultUserSubstanceDraft,
   );
@@ -372,6 +396,35 @@ function App() {
         enqueueNotification("error", message);
       });
 
+    listPresetsV1()
+      .then((result) => {
+        if (disposed) {
+          return;
+        }
+
+        setAllPresets(sortPresetsByTitle(result.presets));
+        setPresetsLoadState("ready");
+        setPresetsLoadError(null);
+      })
+      .catch((error: unknown) => {
+        if (disposed) {
+          return;
+        }
+
+        if (isCommandErrorV1(error)) {
+          const message = `Preset library error: ${formatCommandError(error)}`;
+          setPresetsLoadError(message);
+          setPresetsLoadState("error");
+          enqueueNotification("error", message);
+          return;
+        }
+
+        const message = `Preset library error: ${String(error)}`;
+        setPresetsLoadError(message);
+        setPresetsLoadState("error");
+        enqueueNotification("error", message);
+      });
+
     return () => {
       disposed = true;
     };
@@ -489,6 +542,16 @@ function App() {
     [selectedLibrarySubstance],
   );
 
+  const resolvedSelectedPresetId = useMemo(
+    () => resolveSelectedPresetId(selectedPresetId, allPresets),
+    [allPresets, selectedPresetId],
+  );
+
+  const selectedPreset = useMemo(
+    () => allPresets.find((preset) => preset.id === resolvedSelectedPresetId) ?? null,
+    [allPresets, resolvedSelectedPresetId],
+  );
+
   useEffect(() => {
     if (selectedEditableLibrarySubstance === null) {
       setEditSubstanceDraft(null);
@@ -502,6 +565,14 @@ function App() {
     setEditSubstanceValidationErrors([]);
   }, [selectedEditableLibrarySubstance]);
 
+  useEffect(() => {
+    if (selectedPresetId === resolvedSelectedPresetId) {
+      return;
+    }
+
+    setSelectedPresetId(resolvedSelectedPresetId);
+  }, [resolvedSelectedPresetId, selectedPresetId]);
+
   const libraryPlaceholderState: LeftPanelPlaceholderState = useMemo(() => {
     if (libraryLoadState === "loading") {
       return "loading";
@@ -514,19 +585,41 @@ function App() {
     return filteredLibrarySubstances.length === 0 ? "empty" : "ready";
   }, [filteredLibrarySubstances.length, libraryLoadState]);
 
+  const presetsPlaceholderState: LeftPanelPlaceholderState = useMemo(() => {
+    if (presetsLoadState === "loading") {
+      return "loading";
+    }
+
+    if (presetsLoadState === "error") {
+      return "error";
+    }
+
+    return allPresets.length === 0 ? "empty" : "ready";
+  }, [allPresets.length, presetsLoadState]);
+
+  const builderPlaceholderState: LeftPanelPlaceholderState = useMemo(
+    () => (builderDraft === null ? "empty" : "ready"),
+    [builderDraft],
+  );
+
   const placeholderStateByTab: Readonly<Record<LeftPanelTabId, LeftPanelPlaceholderState>> =
     useMemo(
       () => ({
-        ...LEFT_PANEL_STATIC_PLACEHOLDER_STATE_BY_TAB,
         library: libraryPlaceholderState,
+        builder: builderPlaceholderState,
+        presets: presetsPlaceholderState,
       }),
-      [libraryPlaceholderState],
+      [builderPlaceholderState, libraryPlaceholderState, presetsPlaceholderState],
     );
 
   const libraryEmptyMessage =
     allSubstances.length === 0
       ? "No substances are available in the local catalog."
       : "No substances match the current search and filters.";
+
+  const presetsEmptyMessage = "No presets are available in the local preset library.";
+
+  const builderEmptyMessage = 'Select a preset and click "Use in Builder" to start editing.';
 
   const handleLibraryPhaseToggle = useCallback((phase: SubstancePhaseV1): void => {
     setSelectedLibraryPhases((currentSelection) => toggleFilterValue(currentSelection, phase));
@@ -535,6 +628,38 @@ function App() {
   const handleLibrarySourceToggle = useCallback((source: SubstanceSourceV1): void => {
     setSelectedLibrarySources((currentSelection) => toggleFilterValue(currentSelection, source));
   }, []);
+
+  const handleBuilderDraftFieldChange = useCallback(
+    (field: BuilderDraftField, value: string): void => {
+      setBuilderDraft((currentDraft) => {
+        if (currentDraft === null) {
+          return currentDraft;
+        }
+
+        return updateBuilderDraftField(currentDraft, field, value);
+      });
+    },
+    [],
+  );
+
+  const handleUsePresetInBuilder = useCallback(
+    (presetId: string): void => {
+      const preset = allPresets.find((candidate) => candidate.id === presetId);
+      if (preset === undefined) {
+        const message = "Preset was not found. Reload preset library and try again.";
+        setPresetsLoadError(message);
+        enqueueNotification("error", message);
+        return;
+      }
+
+      setSelectedPresetId(preset.id);
+      setBuilderDraft(createBuilderDraftFromPreset(preset));
+      setBuilderCopyFeedbackMessage(createBuilderCopyFeedbackMessage(preset.title));
+      setActiveLeftPanelTab("builder");
+      enqueueNotification("info", `Preset "${preset.title}" loaded into Builder as editable copy.`);
+    },
+    [allPresets, enqueueNotification],
+  );
 
   const handleCreateSubstanceDraftFieldChange = useCallback(
     (field: UserSubstanceDraftField, value: string): void => {
@@ -736,6 +861,20 @@ function App() {
               mutationErrorMessage: libraryMutationError,
               emptyMessage: libraryEmptyMessage,
               errorMessage: libraryLoadError,
+            }}
+            builderViewModel={{
+              draft: builderDraft,
+              onDraftFieldChange: handleBuilderDraftFieldChange,
+              copyFeedbackMessage: builderCopyFeedbackMessage,
+              emptyMessage: builderEmptyMessage,
+            }}
+            presetsViewModel={{
+              presets: allPresets,
+              selectedPreset,
+              onSelectPreset: setSelectedPresetId,
+              onUsePresetInBuilder: handleUsePresetInBuilder,
+              emptyMessage: presetsEmptyMessage,
+              errorMessage: presetsLoadError,
             }}
           />
         }

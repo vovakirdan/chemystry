@@ -439,6 +439,45 @@ impl StorageRepository {
         Ok(templates)
     }
 
+    pub fn list_preset_reaction_templates(&self) -> Result<Vec<ReactionTemplate>, StorageError> {
+        let connection = self.open()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT
+                    id,
+                    title,
+                    reaction_class,
+                    equation_balanced,
+                    description,
+                    is_preset,
+                    version
+                FROM reaction_template
+                WHERE is_preset = 1
+                ORDER BY lower(title) ASC, version ASC, id ASC",
+            )
+            .map_err(|error| {
+                self.sqlite_error(
+                    "failed to prepare preset reaction template list query",
+                    error,
+                )
+            })?;
+
+        let rows = statement
+            .query_map([], row_to_reaction_template)
+            .map_err(|error| {
+                self.sqlite_error("failed to query preset reaction templates", error)
+            })?;
+
+        let mut templates = Vec::new();
+        for row in rows {
+            templates.push(row.map_err(|error| {
+                self.sqlite_error("failed to decode preset reaction template row", error)
+            })?);
+        }
+
+        Ok(templates)
+    }
+
     pub fn update_reaction_template(
         &self,
         id: &str,

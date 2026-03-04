@@ -123,6 +123,25 @@ This document defines the baseline versioned IPC contracts shared by frontend an
 }
 ```
 
+### `ListPresetsV1Output`
+
+```json
+{
+  "version": "v1",
+  "requestId": "string",
+  "presets": [
+    {
+      "id": "string",
+      "title": "string",
+      "reactionClass": "inorganic | acid_base | redox | organic_basic | equilibrium",
+      "equation": "string",
+      "complexity": "string",
+      "description": "string"
+    }
+  ]
+}
+```
+
 ## Command Table
 
 | Command | Input schema | Output schema | Error schema |
@@ -131,6 +150,7 @@ This document defines the baseline versioned IPC contracts shared by frontend an
 | `health_v1` | `{}` (no input payload) | `HealthV1Output` | `CommandErrorV1` (reserved for future failures) |
 | `get_feature_flags_v1` | `{}` (no input payload) | `GetFeatureFlagsV1Output` | `CommandErrorV1` (reserved for future failures) |
 | `query_substances_v1` | `{}` (or filter object in future) | `{ version, requestId, substances[] }` | `CommandErrorV1` |
+| `list_presets_v1` | `{}` | `ListPresetsV1Output` | `CommandErrorV1` |
 | `create_substance_v1` | `CreateSubstanceV1Input` | `SubstanceMutationV1Output` | `CommandErrorV1` |
 | `update_substance_v1` | `UpdateSubstanceV1Input` | `SubstanceMutationV1Output` | `CommandErrorV1` |
 | `delete_substance_v1` | `DeleteSubstanceV1Input` | `DeleteSubstanceV1Output` | `CommandErrorV1` |

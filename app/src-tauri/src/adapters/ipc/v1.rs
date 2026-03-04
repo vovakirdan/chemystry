@@ -4,7 +4,9 @@ use tauri::State;
 use crate::infra::config::feature_flags::FeatureFlags as ConfigFeatureFlags;
 use crate::infra::errors::{CommandError, CommandResult};
 use crate::infra::logging;
-use crate::storage::{NewSubstance, StorageError, StorageRepository, Substance, UpdateSubstance};
+use crate::storage::{
+    NewSubstance, ReactionTemplate, StorageError, StorageRepository, Substance, UpdateSubstance,
+};
 
 pub const CONTRACT_VERSION_V1: &str = "v1";
 const MAX_NAME_LENGTH: usize = 64;
@@ -16,6 +18,7 @@ const MAX_SUBSTANCE_SMILES_LENGTH: usize = 512;
 const GREET_COMMAND_NAME: &str = "greet_v1";
 const HEALTH_COMMAND_NAME: &str = "health_v1";
 const GET_FEATURE_FLAGS_COMMAND_NAME: &str = "get_feature_flags_v1";
+const LIST_PRESETS_COMMAND_NAME: &str = "list_presets_v1";
 const QUERY_SUBSTANCES_COMMAND_NAME: &str = "query_substances_v1";
 const CREATE_SUBSTANCE_COMMAND_NAME: &str = "create_substance_v1";
 const UPDATE_SUBSTANCE_COMMAND_NAME: &str = "update_substance_v1";
@@ -98,6 +101,25 @@ pub struct QuerySubstancesV1Output {
     pub version: &'static str,
     pub request_id: String,
     pub substances: Vec<SubstanceCatalogItemV1>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PresetCatalogItemV1 {
+    pub id: String,
+    pub title: String,
+    pub reaction_class: String,
+    pub complexity: String,
+    pub description: String,
+    pub equation_balanced: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ListPresetsV1Output {
+    pub version: &'static str,
+    pub request_id: String,
+    pub presets: Vec<PresetCatalogItemV1>,
 }
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
@@ -245,6 +267,28 @@ fn map_substance_to_catalog_item(substance: Substance) -> SubstanceCatalogItemV1
         molar_mass_g_mol: substance.molar_mass_g_mol,
         phase: substance.phase_default,
         source: source_type_for_contract(&substance.source_type),
+    }
+}
+
+fn complexity_label_for_reaction_class(reaction_class: &str) -> &'static str {
+    match reaction_class {
+        "inorganic" | "acid_base" => "beginner",
+        "redox" | "organic_basic" => "intermediate",
+        "equilibrium" => "advanced",
+        _ => "intermediate",
+    }
+}
+
+fn map_template_to_preset_item(template: ReactionTemplate) -> PresetCatalogItemV1 {
+    let complexity = complexity_label_for_reaction_class(&template.reaction_class).to_string();
+
+    PresetCatalogItemV1 {
+        id: template.id,
+        title: template.title,
+        reaction_class: template.reaction_class,
+        complexity,
+        description: template.description,
+        equation_balanced: template.equation_balanced,
     }
 }
 
@@ -543,6 +587,30 @@ fn map_storage_query_error(request_id: &str, error: StorageError) -> CommandErro
     }
 }
 
+fn map_storage_list_presets_error(request_id: &str, error: StorageError) -> CommandErrorV1 {
+    match error {
+        StorageError::AppDataPathResolution(_)
+        | StorageError::InvalidDatabasePath(_)
+        | StorageError::InvalidBackupFormat { .. }
+        | StorageError::Io { .. } => CommandError::io(
+            CONTRACT_VERSION_V1,
+            request_id,
+            "PRESET_LIST_IO_FAILED",
+            "Failed to read local preset storage.",
+        ),
+        StorageError::Sqlite { .. }
+        | StorageError::InvalidMigrationPlan(_)
+        | StorageError::DataInvariant(_)
+        | StorageError::AsyncTaskJoin(_)
+        | StorageError::MigrationFailed { .. } => CommandError::internal(
+            CONTRACT_VERSION_V1,
+            request_id,
+            "PRESET_LIST_FAILED",
+            "Failed to list local presets.",
+        ),
+    }
+}
+
 pub fn validate_query_substances_v1_input(
     input: &QuerySubstancesV1Input,
     request_id: &str,
@@ -594,6 +662,30 @@ pub fn validate_query_substances_v1_input(
         search: normalized_search.map(str::to_string),
         phase_filter,
         source_filter,
+    })
+}
+
+fn list_presets_v1_with_repository(
+    repository: &StorageRepository,
+    request_id: &str,
+) -> CommandResult<ListPresetsV1Output> {
+    let templates = repository
+        .list_preset_reaction_templates()
+        .map_err(|error| {
+            eprintln!(
+                "[ipc] storage_failure command={} request_id={} details={}",
+                LIST_PRESETS_COMMAND_NAME, request_id, error
+            );
+            map_storage_list_presets_error(request_id, error)
+        })?;
+
+    Ok(ListPresetsV1Output {
+        version: CONTRACT_VERSION_V1,
+        request_id: request_id.to_string(),
+        presets: templates
+            .into_iter()
+            .map(map_template_to_preset_item)
+            .collect(),
     })
 }
 
@@ -807,6 +899,26 @@ pub fn get_feature_flags_v1() -> GetFeatureFlagsV1Output {
 }
 
 #[tauri::command]
+pub fn list_presets_v1(
+    repository: State<'_, StorageRepository>,
+) -> CommandResult<ListPresetsV1Output> {
+    let request_id = logging::next_request_id();
+    logging::log_command_start(LIST_PRESETS_COMMAND_NAME, &request_id);
+
+    let result = list_presets_v1_with_repository(&repository, &request_id);
+    match result {
+        Ok(output) => {
+            logging::log_command_success(LIST_PRESETS_COMMAND_NAME, &request_id);
+            Ok(output)
+        }
+        Err(error) => {
+            logging::log_command_failure(LIST_PRESETS_COMMAND_NAME, &error);
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
 pub fn create_substance_v1(
     input: CreateSubstanceV1Input,
     repository: State<'_, StorageRepository>,
@@ -918,11 +1030,14 @@ pub fn query_substances_v1(
 #[cfg(test)]
 mod tests {
     use rusqlite::{params, Connection};
+    use serde_json::json;
     use tempfile::TempDir;
 
     use super::*;
     use crate::infra::errors::ErrorCategory;
-    use crate::storage::{run_migrations, NewScenarioRun, NewSubstance, StorageRepository};
+    use crate::storage::{
+        run_migrations, NewReactionTemplate, NewScenarioRun, NewSubstance, StorageRepository,
+    };
 
     fn setup_repository(file_name: &str) -> (TempDir, StorageRepository) {
         let temp_dir = TempDir::new().expect("must create temp directory");
@@ -1164,6 +1279,153 @@ mod tests {
                 message: "`molarMassGMol` must be a positive number.".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn list_presets_v1_only_returns_rows_marked_as_presets() {
+        let (_temp_dir, repository) = setup_repository("list-presets-only.sqlite3");
+        repository
+            .seed_baseline_data()
+            .expect("baseline seed should succeed");
+        repository
+            .create_reaction_template(&NewReactionTemplate {
+                id: "user-template-non-preset".to_string(),
+                title: "Temporary user template".to_string(),
+                reaction_class: "inorganic".to_string(),
+                equation_balanced: "A + B -> AB".to_string(),
+                description: "Should not appear in preset list.".to_string(),
+                is_preset: false,
+                version: 1,
+            })
+            .expect("must create non-preset template");
+
+        let output = list_presets_v1_with_repository(&repository, "req-list-presets")
+            .expect("listing presets should succeed");
+        let preset_ids = output
+            .presets
+            .iter()
+            .map(|preset| preset.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(output.version, CONTRACT_VERSION_V1);
+        assert_eq!(output.request_id, "req-list-presets");
+        assert!(!preset_ids.contains(&"user-template-non-preset"));
+        assert_eq!(
+            preset_ids,
+            vec![
+                "builtin-preset-hydrogen-combustion-v1",
+                "builtin-preset-acid-base-neutralization-v1"
+            ]
+        );
+    }
+
+    #[test]
+    fn list_presets_v1_contract_serialization_has_expected_fields() {
+        let item = map_template_to_preset_item(ReactionTemplate {
+            id: "builtin-preset-redox-demo-v1".to_string(),
+            title: "Redox demo".to_string(),
+            reaction_class: "redox".to_string(),
+            equation_balanced: "2H2 + O2 -> 2H2O".to_string(),
+            description: "Demo preset".to_string(),
+            is_preset: true,
+            version: 1,
+        });
+
+        assert_eq!(item.complexity, "intermediate");
+
+        let payload = serde_json::to_value(ListPresetsV1Output {
+            version: CONTRACT_VERSION_V1,
+            request_id: "req-preset-shape".to_string(),
+            presets: vec![item],
+        })
+        .expect("payload must serialize");
+
+        assert_eq!(
+            payload,
+            json!({
+                "version": "v1",
+                "requestId": "req-preset-shape",
+                "presets": [{
+                    "id": "builtin-preset-redox-demo-v1",
+                    "title": "Redox demo",
+                    "reactionClass": "redox",
+                    "complexity": "intermediate",
+                    "description": "Demo preset",
+                    "equationBalanced": "2H2 + O2 -> 2H2O"
+                }]
+            })
+        );
+    }
+
+    #[test]
+    fn list_presets_v1_returns_deterministic_ordering() {
+        let (_temp_dir, repository) = setup_repository("list-presets-ordering.sqlite3");
+        repository
+            .create_reaction_template(&NewReactionTemplate {
+                id: "preset-beta-v1".to_string(),
+                title: "Beta".to_string(),
+                reaction_class: "inorganic".to_string(),
+                equation_balanced: "B -> B".to_string(),
+                description: "Beta".to_string(),
+                is_preset: true,
+                version: 1,
+            })
+            .expect("must create beta preset");
+        repository
+            .create_reaction_template(&NewReactionTemplate {
+                id: "preset-alpha-v2".to_string(),
+                title: "Alpha".to_string(),
+                reaction_class: "acid_base".to_string(),
+                equation_balanced: "HA + B -> A- + BH+".to_string(),
+                description: "Alpha v2".to_string(),
+                is_preset: true,
+                version: 2,
+            })
+            .expect("must create alpha v2 preset");
+        repository
+            .create_reaction_template(&NewReactionTemplate {
+                id: "preset-alpha-v1".to_string(),
+                title: "Alpha".to_string(),
+                reaction_class: "acid_base".to_string(),
+                equation_balanced: "HA + OH- -> A- + H2O".to_string(),
+                description: "Alpha v1".to_string(),
+                is_preset: true,
+                version: 1,
+            })
+            .expect("must create alpha v1 preset");
+        repository
+            .create_reaction_template(&NewReactionTemplate {
+                id: "non-preset-order-check".to_string(),
+                title: "Aardvark".to_string(),
+                reaction_class: "inorganic".to_string(),
+                equation_balanced: "A -> A".to_string(),
+                description: "Should be filtered out".to_string(),
+                is_preset: false,
+                version: 1,
+            })
+            .expect("must create non-preset template");
+
+        let first_call = list_presets_v1_with_repository(&repository, "req-order-1")
+            .expect("first list call should succeed");
+        let second_call = list_presets_v1_with_repository(&repository, "req-order-2")
+            .expect("second list call should succeed");
+
+        let first_ids = first_call
+            .presets
+            .iter()
+            .map(|preset| preset.id.as_str())
+            .collect::<Vec<_>>();
+        let second_ids = second_call
+            .presets
+            .iter()
+            .map(|preset| preset.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            first_ids,
+            vec!["preset-alpha-v1", "preset-alpha-v2", "preset-beta-v1"]
+        );
+        assert_eq!(second_ids, first_ids);
     }
 
     #[test]

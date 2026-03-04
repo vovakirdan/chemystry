@@ -657,6 +657,127 @@ button.left-panel-library-delete-button:hover {
   padding: 0.42rem 0.5rem;
 }
 
+.left-panel-builder-view,
+.left-panel-presets-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.left-panel-builder-feedback {
+  margin: 0 0 0.55rem;
+  border: 1px solid var(--color-info);
+  border-radius: var(--radius-sm);
+  background: var(--color-info-soft);
+  color: var(--color-info);
+  font-size: var(--font-size-sm);
+  padding: 0.45rem 0.5rem;
+}
+
+.left-panel-builder-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.left-panel-builder-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.left-panel-builder-form textarea {
+  width: 100%;
+  min-height: 5rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  color: var(--color-text-primary);
+  padding: var(--space-2) calc(var(--space-2) + 0.2rem);
+  resize: vertical;
+}
+
+.left-panel-presets-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  max-height: 17rem;
+  overflow-y: auto;
+}
+
+.left-panel-presets-item {
+  margin: 0;
+}
+
+.left-panel-presets-card {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: #f9fcff;
+  padding: 0.52rem 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.left-panel-presets-card[aria-selected="true"] {
+  border-color: var(--color-accent);
+  background: #edf5fc;
+}
+
+button.left-panel-presets-select-button {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-weight: 700;
+  text-align: left;
+  padding: 0;
+}
+
+button.left-panel-presets-select-button:hover {
+  background: transparent;
+  border: 0;
+  color: var(--color-accent-hover);
+}
+
+.left-panel-presets-meta {
+  margin: 0;
+  display: grid;
+  gap: 0.28rem;
+}
+
+.left-panel-presets-meta div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
+.left-panel-presets-meta dt,
+.left-panel-presets-meta dd {
+  margin: 0;
+  font-size: var(--font-size-xs);
+}
+
+.left-panel-presets-meta dt {
+  color: var(--color-text-secondary);
+}
+
+.left-panel-presets-meta dd {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.left-panel-presets-description {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
 .left-panel-placeholder {
   display: flex;
   flex-direction: column;

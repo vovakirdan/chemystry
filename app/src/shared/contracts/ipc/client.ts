@@ -12,6 +12,7 @@ import {
   type DeleteSubstanceV1Output,
   IPC_COMMANDS_V1,
   IPC_CONTRACT_VERSION_V1,
+  REACTION_CLASSES_V1,
   SUBSTANCE_PHASES_V1,
   SUBSTANCE_SOURCES_V1,
   type CommandErrorCategoryV1,
@@ -20,7 +21,10 @@ import {
   type GreetV1Input,
   type GreetV1Output,
   type HealthV1Output,
+  type ListPresetsV1Output,
   type ListSubstancesV1Output,
+  type PresetCatalogEntryV1,
+  type ReactionClassV1,
   type SubstanceCatalogEntryV1,
   type SubstanceMutationV1Output,
   type SubstancePhaseV1,
@@ -42,6 +46,7 @@ const USER_MESSAGE_BY_CODE_V1: Record<string, string> = {
   NAME_TOO_LONG: "Name must be 64 characters or fewer.",
   FEATURE_DISABLED: "This module is disabled by configuration.",
   INVALID_SUBSTANCE_PAYLOAD: "Substance catalog data is invalid. Please retry.",
+  INVALID_PRESET_PAYLOAD: "Preset library data is invalid. Please retry.",
 };
 
 const USER_MESSAGE_BY_CATEGORY_V1: Record<CommandErrorCategoryV1, string> = {
@@ -63,6 +68,7 @@ export interface ResolvedFeatureFlagsV1 {
 
 const SUBSTANCE_PHASE_SET_V1: ReadonlySet<SubstancePhaseV1> = new Set(SUBSTANCE_PHASES_V1);
 const SUBSTANCE_SOURCE_SET_V1: ReadonlySet<SubstanceSourceV1> = new Set(SUBSTANCE_SOURCES_V1);
+const REACTION_CLASS_SET_V1: ReadonlySet<ReactionClassV1> = new Set(REACTION_CLASSES_V1);
 
 function nextClientRequestId(): string {
   clientRequestSequence += 1;
@@ -95,6 +101,19 @@ function createInvalidSubstancePayloadError(
     requestId,
     category: "internal",
     code: "INVALID_SUBSTANCE_PAYLOAD",
+    message,
+  };
+}
+
+function createInvalidPresetPayloadError(
+  message: string,
+  requestId: string = nextClientRequestId(),
+): CommandErrorV1 {
+  return {
+    version: IPC_CONTRACT_VERSION_V1,
+    requestId,
+    category: "internal",
+    code: "INVALID_PRESET_PAYLOAD",
     message,
   };
 }
@@ -148,6 +167,85 @@ function parseSubstanceMolarMassV1(value: unknown): number | null {
   }
 
   return null;
+}
+
+function parseReactionClassV1(value: unknown): ReactionClassV1 | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  return REACTION_CLASS_SET_V1.has(value as ReactionClassV1) ? (value as ReactionClassV1) : null;
+}
+
+function parsePresetEntryV1(
+  candidate: unknown,
+  requestId: string,
+  index: number,
+): PresetCatalogEntryV1 {
+  if (!isRecord(candidate)) {
+    throw createInvalidPresetPayloadError(
+      `Preset at index ${index.toString()} is not an object.`,
+      requestId,
+    );
+  }
+
+  const id = candidate.id;
+  const title = candidate.title;
+  const reactionClass = parseReactionClassV1(
+    readFirstDefined(candidate, ["reactionClass", "reaction_class", "class"]),
+  );
+  const equation = readFirstDefined(candidate, [
+    "equation",
+    "equationBalanced",
+    "equation_balanced",
+  ]);
+  const complexity = readFirstDefined(candidate, ["complexity", "difficulty"]);
+  const description = candidate.description;
+
+  if (typeof id !== "string" || id.length === 0) {
+    throw createInvalidPresetPayloadError(
+      `Preset at index ${index.toString()} is missing a valid id.`,
+      requestId,
+    );
+  }
+
+  if (typeof title !== "string" || title.trim().length === 0) {
+    throw createInvalidPresetPayloadError(`Preset "${id}" is missing a valid title.`, requestId);
+  }
+
+  if (reactionClass === null) {
+    throw createInvalidPresetPayloadError(
+      `Preset "${id}" has an unsupported reaction class.`,
+      requestId,
+    );
+  }
+
+  if (typeof equation !== "string" || equation.trim().length === 0) {
+    throw createInvalidPresetPayloadError(`Preset "${id}" is missing a valid equation.`, requestId);
+  }
+
+  if (typeof complexity !== "string" || complexity.trim().length === 0) {
+    throw createInvalidPresetPayloadError(
+      `Preset "${id}" is missing a valid complexity value.`,
+      requestId,
+    );
+  }
+
+  if (typeof description !== "string") {
+    throw createInvalidPresetPayloadError(
+      `Preset "${id}" is missing a valid description.`,
+      requestId,
+    );
+  }
+
+  return {
+    id,
+    title: title.trim(),
+    reactionClass,
+    equation: equation.trim(),
+    complexity: complexity.trim(),
+    description: description.trim(),
+  };
 }
 
 function parseSubstanceEntryV1(
@@ -263,6 +361,33 @@ function parseListSubstancesV1Output(payload: unknown): ListSubstancesV1Output {
     requestId,
     substances: payload.substances.map((candidate, index) =>
       parseSubstanceEntryV1(candidate, requestId, index),
+    ),
+  };
+}
+
+function parseListPresetsV1Output(payload: unknown): ListPresetsV1Output {
+  if (!isRecord(payload)) {
+    throw createInvalidPresetPayloadError("Presets payload is not an object.");
+  }
+
+  const requestId =
+    typeof payload.requestId === "string" ? payload.requestId : nextClientRequestId();
+  if (payload.version !== IPC_CONTRACT_VERSION_V1) {
+    throw createInvalidPresetPayloadError("Presets payload version is invalid.", requestId);
+  }
+
+  if (!Array.isArray(payload.presets)) {
+    throw createInvalidPresetPayloadError(
+      "Presets payload is missing the presets list.",
+      requestId,
+    );
+  }
+
+  return {
+    version: IPC_CONTRACT_VERSION_V1,
+    requestId,
+    presets: payload.presets.map((candidate, index) =>
+      parsePresetEntryV1(candidate, requestId, index),
     ),
   };
 }
@@ -403,6 +528,17 @@ export async function listSubstancesV1(): Promise<ListSubstancesV1Output> {
       input: {},
     });
     return parseListSubstancesV1Output(payload);
+  } catch (error) {
+    throw normalizeCommandErrorV1(error);
+  }
+}
+
+export async function listPresetsV1(): Promise<ListPresetsV1Output> {
+  try {
+    const payload = await invoke<unknown>(IPC_COMMANDS_V1.listPresets, {
+      input: {},
+    });
+    return parseListPresetsV1Output(payload);
   } catch (error) {
     throw normalizeCommandErrorV1(error);
   }

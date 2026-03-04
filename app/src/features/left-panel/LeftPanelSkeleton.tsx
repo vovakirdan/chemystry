@@ -1,11 +1,15 @@
 import type { ReactNode } from "react";
-import type { SubstanceCatalogEntryV1 } from "../../shared/contracts/ipc/v1";
+import type { PresetCatalogEntryV1, SubstanceCatalogEntryV1 } from "../../shared/contracts/ipc/v1";
 import {
   LIBRARY_PHASE_FILTER_OPTIONS,
   LIBRARY_SOURCE_FILTER_OPTIONS,
-  isUserSubstanceEditable,
   formatLibraryPhaseLabel,
   formatLibrarySourceLabel,
+  formatPresetComplexityLabel,
+  formatReactionClassLabel,
+  isUserSubstanceEditable,
+  type BuilderDraft,
+  type BuilderDraftField,
   type LeftPanelPlaceholderState,
   type LeftPanelTabId,
   type UserSubstanceDraft,
@@ -44,11 +48,29 @@ type LeftPanelLibraryViewModel = {
   errorMessage: string | null;
 };
 
+type LeftPanelBuilderViewModel = {
+  draft: BuilderDraft | null;
+  onDraftFieldChange: (field: BuilderDraftField, value: string) => void;
+  copyFeedbackMessage: string | null;
+  emptyMessage: string;
+};
+
+type LeftPanelPresetsViewModel = {
+  presets: ReadonlyArray<PresetCatalogEntryV1>;
+  selectedPreset: PresetCatalogEntryV1 | null;
+  onSelectPreset: (presetId: string) => void;
+  onUsePresetInBuilder: (presetId: string) => void;
+  emptyMessage: string;
+  errorMessage: string | null;
+};
+
 type LeftPanelSkeletonProps = {
   activeTab: LeftPanelTabId;
   onTabChange: (tab: LeftPanelTabId) => void;
   placeholderStateByTab: Readonly<Record<LeftPanelTabId, LeftPanelPlaceholderState>>;
   libraryViewModel: LeftPanelLibraryViewModel;
+  builderViewModel: LeftPanelBuilderViewModel;
+  presetsViewModel: LeftPanelPresetsViewModel;
 };
 
 const LEFT_PANEL_TAB_DEFINITIONS: ReadonlyArray<LeftPanelTabDefinition> = [
@@ -488,11 +510,272 @@ function renderLibraryView(
   );
 }
 
+function renderBuilderState(state: LeftPanelPlaceholderState, emptyMessage: string): ReactNode {
+  if (state === "loading") {
+    return (
+      <div
+        className="left-panel-placeholder left-panel-placeholder--loading"
+        data-testid="builder-state-loading"
+      >
+        <h4 className="left-panel-placeholder-title">Preparing builder draft</h4>
+        <p className="left-panel-placeholder-text">Loading preset data for manual editing.</p>
+      </div>
+    );
+  }
+
+  if (state === "error") {
+    return (
+      <div
+        className="left-panel-placeholder left-panel-placeholder--error"
+        role="alert"
+        data-testid="builder-state-error"
+      >
+        <h4 className="left-panel-placeholder-title">Unable to open builder draft</h4>
+        <p className="left-panel-placeholder-text">Select the preset again to retry.</p>
+      </div>
+    );
+  }
+
+  if (state === "empty") {
+    return (
+      <div
+        className="left-panel-placeholder left-panel-placeholder--empty"
+        data-testid="builder-state-empty"
+      >
+        <h4 className="left-panel-placeholder-title">Builder is empty</h4>
+        <p className="left-panel-placeholder-text">{emptyMessage}</p>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function renderBuilderView(
+  state: LeftPanelPlaceholderState,
+  builderViewModel: LeftPanelBuilderViewModel,
+): ReactNode {
+  const stateContent = renderBuilderState(state, builderViewModel.emptyMessage);
+  if (stateContent !== null) {
+    return (
+      <div
+        className="left-panel-data-boundary"
+        aria-live="polite"
+        data-testid="left-panel-data-boundary-builder"
+      >
+        {stateContent}
+      </div>
+    );
+  }
+
+  if (builderViewModel.draft === null) {
+    return null;
+  }
+
+  return (
+    <div className="left-panel-builder-view" data-testid="left-panel-builder-view">
+      <div
+        className="left-panel-data-boundary"
+        aria-live="polite"
+        data-testid="left-panel-data-boundary-builder"
+      >
+        {builderViewModel.copyFeedbackMessage !== null && (
+          <p
+            className="left-panel-builder-feedback"
+            role="status"
+            data-testid="builder-copy-feedback"
+          >
+            {builderViewModel.copyFeedbackMessage}
+          </p>
+        )}
+
+        <form className="left-panel-builder-form" data-testid="builder-form">
+          <label>
+            Title
+            <input
+              type="text"
+              value={builderViewModel.draft.title}
+              onChange={(event) =>
+                builderViewModel.onDraftFieldChange("title", event.currentTarget.value)
+              }
+              data-testid="builder-title-input"
+            />
+          </label>
+
+          <label>
+            Reaction class
+            <select
+              value={builderViewModel.draft.reactionClass}
+              onChange={(event) =>
+                builderViewModel.onDraftFieldChange("reactionClass", event.currentTarget.value)
+              }
+              data-testid="builder-class-select"
+            >
+              <option value="inorganic">{formatReactionClassLabel("inorganic")}</option>
+              <option value="acid_base">{formatReactionClassLabel("acid_base")}</option>
+              <option value="redox">{formatReactionClassLabel("redox")}</option>
+              <option value="organic_basic">{formatReactionClassLabel("organic_basic")}</option>
+              <option value="equilibrium">{formatReactionClassLabel("equilibrium")}</option>
+            </select>
+          </label>
+
+          <label>
+            Equation
+            <input
+              type="text"
+              value={builderViewModel.draft.equation}
+              onChange={(event) =>
+                builderViewModel.onDraftFieldChange("equation", event.currentTarget.value)
+              }
+              data-testid="builder-equation-input"
+            />
+          </label>
+
+          <label>
+            Description
+            <textarea
+              value={builderViewModel.draft.description}
+              onChange={(event) =>
+                builderViewModel.onDraftFieldChange("description", event.currentTarget.value)
+              }
+              data-testid="builder-description-input"
+              rows={4}
+            />
+          </label>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function renderPresetsState(
+  state: LeftPanelPlaceholderState,
+  presetsViewModel: LeftPanelPresetsViewModel,
+): ReactNode {
+  if (state === "loading") {
+    return (
+      <div
+        className="left-panel-placeholder left-panel-placeholder--loading"
+        data-testid="presets-state-loading"
+      >
+        <h4 className="left-panel-placeholder-title">Loading presets</h4>
+        <p className="left-panel-placeholder-text">Fetching preset templates from local storage.</p>
+      </div>
+    );
+  }
+
+  if (state === "error") {
+    return (
+      <div
+        className="left-panel-placeholder left-panel-placeholder--error"
+        role="alert"
+        data-testid="presets-state-error"
+      >
+        <h4 className="left-panel-placeholder-title">Unable to load preset library</h4>
+        <p className="left-panel-placeholder-text">
+          {presetsViewModel.errorMessage ?? "Retry when backend is available."}
+        </p>
+      </div>
+    );
+  }
+
+  if (state === "empty") {
+    return (
+      <div
+        className="left-panel-placeholder left-panel-placeholder--empty"
+        data-testid="presets-state-empty"
+      >
+        <h4 className="left-panel-placeholder-title">No presets to display</h4>
+        <p className="left-panel-placeholder-text">{presetsViewModel.emptyMessage}</p>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function renderPresetsView(
+  state: LeftPanelPlaceholderState,
+  presetsViewModel: LeftPanelPresetsViewModel,
+): ReactNode {
+  const stateContent = renderPresetsState(state, presetsViewModel);
+  if (stateContent !== null) {
+    return (
+      <div
+        className="left-panel-data-boundary"
+        aria-live="polite"
+        data-testid="left-panel-data-boundary-presets"
+      >
+        {stateContent}
+      </div>
+    );
+  }
+
+  return (
+    <div className="left-panel-presets-view" data-testid="left-panel-presets-view">
+      <div
+        className="left-panel-data-boundary"
+        aria-live="polite"
+        data-testid="left-panel-data-boundary-presets"
+      >
+        <ul className="left-panel-presets-list" data-testid="presets-list">
+          {presetsViewModel.presets.map((preset) => {
+            const isSelected = presetsViewModel.selectedPreset?.id === preset.id;
+            return (
+              <li key={preset.id} className="left-panel-presets-item">
+                <article
+                  className="left-panel-presets-card"
+                  data-testid={`preset-card-${preset.id}`}
+                  aria-selected={isSelected}
+                >
+                  <button
+                    type="button"
+                    className="left-panel-presets-select-button"
+                    onClick={() => presetsViewModel.onSelectPreset(preset.id)}
+                    data-testid={`preset-select-${preset.id}`}
+                  >
+                    {preset.title}
+                  </button>
+                  <dl className="left-panel-presets-meta" data-testid={`preset-meta-${preset.id}`}>
+                    <div>
+                      <dt>Class</dt>
+                      <dd>{formatReactionClassLabel(preset.reactionClass)}</dd>
+                    </div>
+                    <div>
+                      <dt>Complexity</dt>
+                      <dd>{formatPresetComplexityLabel(preset.complexity)}</dd>
+                    </div>
+                  </dl>
+                  <p
+                    className="left-panel-presets-description"
+                    data-testid={`preset-description-${preset.id}`}
+                  >
+                    {preset.description}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => presetsViewModel.onUsePresetInBuilder(preset.id)}
+                    data-testid={`preset-use-${preset.id}`}
+                  >
+                    Use in Builder
+                  </button>
+                </article>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 function LeftPanelSkeleton({
   activeTab,
   onTabChange,
   placeholderStateByTab,
   libraryViewModel,
+  builderViewModel,
+  presetsViewModel,
 }: LeftPanelSkeletonProps) {
   const activeDefinition = LEFT_PANEL_TAB_BY_ID[activeTab];
   const activePlaceholderState = placeholderStateByTab[activeTab];
@@ -553,9 +836,10 @@ function LeftPanelSkeleton({
           <p className="panel-description">{activeDefinition.description}</p>
         </header>
 
-        {activeTab === "library" ? (
-          renderLibraryView(activePlaceholderState, libraryViewModel)
-        ) : (
+        {activeTab === "library" && renderLibraryView(activePlaceholderState, libraryViewModel)}
+        {activeTab === "builder" && renderBuilderView(activePlaceholderState, builderViewModel)}
+        {activeTab === "presets" && renderPresetsView(activePlaceholderState, presetsViewModel)}
+        {activeTab !== "library" && activeTab !== "builder" && activeTab !== "presets" && (
           <div
             className="left-panel-data-boundary"
             aria-live="polite"

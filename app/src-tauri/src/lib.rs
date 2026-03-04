@@ -42,6 +42,7 @@ pub fn run() {
             ipc_v1::greet_v1,
             ipc_v1::health_v1,
             ipc_v1::get_feature_flags_v1,
+            ipc_v1::list_presets_v1,
             ipc_v1::create_substance_v1,
             ipc_v1::update_substance_v1,
             ipc_v1::delete_substance_v1,

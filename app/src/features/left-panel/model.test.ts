@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { SubstanceCatalogEntryV1 } from "../../shared/contracts/ipc/v1";
+import type { PresetCatalogEntryV1, SubstanceCatalogEntryV1 } from "../../shared/contracts/ipc/v1";
 import {
+  createBuilderDraftFromPreset,
   DEFAULT_USER_SUBSTANCE_DRAFT,
   LIBRARY_PHASE_FILTER_OPTIONS,
   LIBRARY_SOURCE_FILTER_OPTIONS,
   createUserSubstanceDraftFromCatalogEntry,
   filterLibrarySubstances,
+  formatPresetComplexityLabel,
+  formatReactionClassLabel,
   isUserSubstanceEditable,
   normalizeLibrarySearchQuery,
+  resolveSelectedPresetId,
   resolveSelectedLibrarySubstanceId,
+  updateBuilderDraftField,
   validateUserSubstanceDraft,
 } from "./model";
 
@@ -36,6 +41,25 @@ const SAMPLE_SUBSTANCES: ReadonlyArray<SubstanceCatalogEntryV1> = [
     phase: "aqueous",
     source: "user",
     molarMassGMol: 58.44277,
+  },
+];
+
+const SAMPLE_PRESETS: ReadonlyArray<PresetCatalogEntryV1> = [
+  {
+    id: "builtin-preset-hydrogen-combustion-v1",
+    title: "Hydrogen combustion",
+    reactionClass: "redox",
+    equation: "2H2 + O2 -> 2H2O",
+    complexity: "intro_level",
+    description: "Preset combustion template for hydrogen oxidation.",
+  },
+  {
+    id: "builtin-preset-acid-base-neutralization-v1",
+    title: "Strong acid/base neutralization",
+    reactionClass: "acid_base",
+    equation: "HCl + NaOH -> NaCl + H2O",
+    complexity: "intermediate",
+    description: "Preset neutralization template for common aqueous media.",
   },
 ];
 
@@ -141,5 +165,48 @@ describe("left panel library model", () => {
       phase: "aqueous",
       molarMassInput: "58.44277",
     });
+  });
+
+  it("creates builder draft values from selected preset and keeps edits isolated", () => {
+    const draft = createBuilderDraftFromPreset(SAMPLE_PRESETS[0]);
+
+    expect(draft).toEqual({
+      title: "Hydrogen combustion",
+      reactionClass: "redox",
+      equation: "2H2 + O2 -> 2H2O",
+      description: "Preset combustion template for hydrogen oxidation.",
+    });
+
+    draft.title = "Custom title";
+    expect(SAMPLE_PRESETS[0].title).toBe("Hydrogen combustion");
+  });
+
+  it("updates builder draft fields and rejects unknown reaction class values", () => {
+    const baseDraft = createBuilderDraftFromPreset(SAMPLE_PRESETS[0]);
+
+    expect(updateBuilderDraftField(baseDraft, "equation", "H2 + O2 -> H2O")).toEqual({
+      ...baseDraft,
+      equation: "H2 + O2 -> H2O",
+    });
+
+    expect(updateBuilderDraftField(baseDraft, "reactionClass", "equilibrium")).toEqual({
+      ...baseDraft,
+      reactionClass: "equilibrium",
+    });
+
+    expect(updateBuilderDraftField(baseDraft, "reactionClass", "unknown_class")).toEqual(baseDraft);
+  });
+
+  it("resolves selected preset id and formats metadata labels", () => {
+    expect(
+      resolveSelectedPresetId("builtin-preset-acid-base-neutralization-v1", SAMPLE_PRESETS),
+    ).toBe("builtin-preset-acid-base-neutralization-v1");
+    expect(resolveSelectedPresetId("missing", SAMPLE_PRESETS)).toBe(
+      "builtin-preset-hydrogen-combustion-v1",
+    );
+    expect(resolveSelectedPresetId("any", [])).toBeNull();
+
+    expect(formatReactionClassLabel("organic_basic")).toBe("Organic Basic");
+    expect(formatPresetComplexityLabel("intro_level")).toBe("Intro Level");
   });
 });
