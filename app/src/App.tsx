@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import AppShell from "./app/layout/AppShell";
 import reactLogo from "./assets/react.svg";
 import type { FeatureFlagKey, FeatureFlags } from "./shared/config/featureFlags";
 import { DEFAULT_FEATURE_FLAGS } from "./shared/config/featureFlags";
@@ -18,6 +19,18 @@ const FEATURE_LABEL_BY_KEY: Record<FeatureFlagKey, string> = {
   importExport: "Import/export",
   advancedPrecision: "Advanced precision",
 };
+
+const FEATURE_ACTION_LABEL_BY_KEY: Record<FeatureFlagKey, string> = {
+  simulation: "Try simulation path",
+  importExport: "Try import/export path",
+  advancedPrecision: "Try advanced precision path",
+};
+
+const FEATURE_KEYS: ReadonlyArray<FeatureFlagKey> = [
+  "simulation",
+  "importExport",
+  "advancedPrecision",
+];
 
 function formatCommandError(error: CommandErrorV1): string {
   return `${toUserFacingMessageV1(error)} [${error.code}] (ref: ${error.requestId})`;
@@ -51,18 +64,31 @@ function App() {
         }
       });
 
-    resolveFeatureFlagsV1().then((result) => {
-      if (disposed) {
-        return;
-      }
+    resolveFeatureFlagsV1()
+      .then((result) => {
+        if (disposed) {
+          return;
+        }
 
-      setFeatureFlags(result.flags);
-      setFeatureFlagsMsg(
-        result.warning
-          ? `Feature flags: ${result.source} (ref: ${result.requestId}) - ${result.warning}`
-          : `Feature flags: ${result.source} (ref: ${result.requestId})`,
-      );
-    });
+        setFeatureFlags(result.flags);
+        setFeatureFlagsMsg(
+          result.warning
+            ? `Feature flags: ${result.source} (ref: ${result.requestId}) - ${result.warning}`
+            : `Feature flags: ${result.source} (ref: ${result.requestId})`,
+        );
+      })
+      .catch((error: unknown) => {
+        if (disposed) {
+          return;
+        }
+
+        if (isCommandErrorV1(error)) {
+          setFeatureFlagsMsg(`Feature flag error: ${formatCommandError(error)}`);
+          return;
+        }
+
+        setFeatureFlagsMsg(`Feature flag error: ${String(error)}`);
+      });
 
     return () => {
       disposed = true;
@@ -102,56 +128,134 @@ function App() {
   }
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <div className="app-root">
+      <AppShell
+        leftPanel={
+          <>
+            <h2 className="panel-title">Navigation</h2>
+            <p className="panel-description">
+              Use Tab to move through controls. Use Alt+1, Alt+2, and Alt+3 to jump between the main
+              panels.
+            </p>
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-      <p>{healthMsg}</p>
-      <p>{featureFlagsMsg}</p>
-      <p>Simulation: {availabilityLabel(featureFlags.simulation)}</p>
-      <p>Import/export: {availabilityLabel(featureFlags.importExport)}</p>
-      <p>Advanced precision: {availabilityLabel(featureFlags.advancedPrecision)}</p>
+            <nav className="panel-nav" aria-label="Center panel sections">
+              <a className="panel-nav-link" href="#backend-health">
+                Backend health
+              </a>
+              <a className="panel-nav-link" href="#feature-flags">
+                Feature paths
+              </a>
+              <a className="panel-nav-link" href="#greet-form">
+                Greeting demo
+              </a>
+            </nav>
+          </>
+        }
+        centerPanel={
+          <>
+            <header className="center-header">
+              <h1>Welcome to Tauri + React</h1>
+              <p>
+                The app shell is split into left, center, and right panels while keeping the
+                original demo actions available in the center workspace.
+              </p>
+            </header>
 
-      <div className="row">
-        <button type="button" onClick={() => triggerFeaturePath("simulation")}>
-          Try simulation path
-        </button>
-        <button type="button" onClick={() => triggerFeaturePath("importExport")}>
-          Try import/export path
-        </button>
-        <button type="button" onClick={() => triggerFeaturePath("advancedPrecision")}>
-          Try advanced precision path
-        </button>
-      </div>
-      <p>{featurePathMsg}</p>
+            <div className="logo-row">
+              <a href="https://vite.dev" target="_blank" rel="noreferrer">
+                <img src="/vite.svg" className="logo vite" alt="Vite logo" />
+              </a>
+              <a href="https://tauri.app" target="_blank" rel="noreferrer">
+                <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
+              </a>
+              <a href="https://react.dev" target="_blank" rel="noreferrer">
+                <img src={reactLogo} className="logo react" alt="React logo" />
+              </a>
+            </div>
 
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+            <section id="backend-health" className="content-card" aria-label="Backend health card">
+              <h2>Backend health</h2>
+              <p>{healthMsg}</p>
+              <p>{featureFlagsMsg}</p>
+            </section>
+
+            <section id="feature-flags" className="content-card" aria-label="Feature paths card">
+              <h2>Feature paths</h2>
+              <ul className="status-list">
+                {FEATURE_KEYS.map((feature) => (
+                  <li key={feature}>
+                    {FEATURE_LABEL_BY_KEY[feature]}: {availabilityLabel(featureFlags[feature])}
+                  </li>
+                ))}
+              </ul>
+
+              <div className="action-row">
+                {FEATURE_KEYS.map((feature) => (
+                  <button type="button" key={feature} onClick={() => triggerFeaturePath(feature)}>
+                    {FEATURE_ACTION_LABEL_BY_KEY[feature]}
+                  </button>
+                ))}
+              </div>
+
+              <p>{featurePathMsg}</p>
+            </section>
+
+            <section id="greet-form" className="content-card" aria-label="Greeting demo card">
+              <h2>Greeting demo</h2>
+              <form
+                className="greet-form"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  greet();
+                }}
+              >
+                <input
+                  id="greet-input"
+                  onChange={(e) => setName(e.currentTarget.value)}
+                  value={name}
+                  placeholder="Enter a name..."
+                />
+                <button type="submit">Greet</button>
+              </form>
+              <p>{greetMsg}</p>
+            </section>
+          </>
+        }
+        rightPanel={
+          <>
+            <h2 className="panel-title">Status</h2>
+            <p className="panel-description">
+              Live shell summary for the backend and feature gate state.
+            </p>
+
+            <p className="status-line">{healthMsg}</p>
+            <ul className="status-list">
+              {FEATURE_KEYS.map((feature) => (
+                <li key={feature}>
+                  {FEATURE_LABEL_BY_KEY[feature]}: {availabilityLabel(featureFlags[feature])}
+                </li>
+              ))}
+            </ul>
+
+            <h3 className="panel-subtitle">Panel shortcuts</h3>
+            <ul className="kbd-list" aria-label="Panel keyboard shortcuts">
+              <li>
+                <span>Left panel</span>
+                <kbd>Alt+1</kbd>
+              </li>
+              <li>
+                <span>Center panel</span>
+                <kbd>Alt+2</kbd>
+              </li>
+              <li>
+                <span>Right panel</span>
+                <kbd>Alt+3</kbd>
+              </li>
+            </ul>
+          </>
+        }
+      />
+    </div>
   );
 }
 
