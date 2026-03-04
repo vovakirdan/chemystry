@@ -4,6 +4,7 @@ import {
   formatStoichiometryValue,
   type StoichiometryCalculationResult,
 } from "../../shared/lib/stoichiometry";
+import type { CalculationResultTypeV1, CalculationSummaryV1 } from "../../shared/contracts/ipc/v1";
 
 export type RightPanelFeatureStatus = {
   id: string;
@@ -17,6 +18,9 @@ type RightPanelSkeletonProps = {
   runtimeSettings?: RightPanelRuntimeSettings;
   onRuntimeSettingsChange?: (state: RightPanelRuntimeSettings) => void;
   stoichiometryResult?: StoichiometryCalculationResult;
+  calculationSummary?: CalculationSummaryV1 | null;
+  calculationSummaryIsStale?: boolean;
+  onExportCalculationSummary?: () => void;
 };
 
 type RightPanelSectionDefinition = {
@@ -90,12 +94,26 @@ function formatRuntimeNumberInput(value: number | null | undefined, fallbackValu
   return String(value);
 }
 
+function getCalculationSummaryEntry(
+  summary: CalculationSummaryV1 | null | undefined,
+  resultType: CalculationResultTypeV1,
+): CalculationSummaryV1["entries"][number] | null {
+  if (summary === null || summary === undefined) {
+    return null;
+  }
+
+  return summary.entries.find((entry) => entry.resultType === resultType) ?? null;
+}
+
 function RightPanelSkeleton({
   healthMessage,
   featureStatuses,
   runtimeSettings,
   onRuntimeSettingsChange,
   stoichiometryResult,
+  calculationSummary,
+  calculationSummaryIsStale = false,
+  onExportCalculationSummary,
 }: RightPanelSkeletonProps) {
   const [activeSection, setActiveSection] = useState<RightPanelSectionId>(
     DEFAULT_RIGHT_PANEL_SECTION,
@@ -142,6 +160,26 @@ function RightPanelSkeleton({
     [calculationPassesInput],
   );
   const parsedFpsLimit = useMemo(() => parseNumberInput(fpsLimitInput), [fpsLimitInput]);
+  const stoichiometrySummaryEntry = useMemo(
+    () => getCalculationSummaryEntry(calculationSummary, "stoichiometry"),
+    [calculationSummary],
+  );
+  const limitingSummaryEntry = useMemo(
+    () => getCalculationSummaryEntry(calculationSummary, "limiting_reagent"),
+    [calculationSummary],
+  );
+  const yieldSummaryEntry = useMemo(
+    () => getCalculationSummaryEntry(calculationSummary, "yield"),
+    [calculationSummary],
+  );
+  const concentrationSummaryEntry = useMemo(
+    () => getCalculationSummaryEntry(calculationSummary, "concentration"),
+    [calculationSummary],
+  );
+  const conversionSummaryEntry = useMemo(
+    () => getCalculationSummaryEntry(calculationSummary, "conversion"),
+    [calculationSummary],
+  );
 
   useEffect(() => {
     onRuntimeSettingsChange?.({
@@ -366,145 +404,221 @@ function RightPanelSkeleton({
                     aria-label="Stoichiometry summary"
                     data-testid="right-panel-summary-stoichiometry"
                   >
-                    <h4 className="panel-subtitle">Stoichiometry (MVP)</h4>
+                    <h4 className="panel-subtitle">Calculation summary (MVP)</h4>
+                    <div className="action-row">
+                      <button
+                        type="button"
+                        data-testid="right-panel-summary-export-calculation"
+                        onClick={() => onExportCalculationSummary?.()}
+                        disabled={
+                          onExportCalculationSummary === undefined ||
+                          calculationSummary === null ||
+                          calculationSummary === undefined
+                        }
+                      >
+                        Export summary (JSON)
+                      </button>
+                    </div>
+                    <p className="status-line" data-testid="right-panel-summary-export-status">
+                      {calculationSummaryIsStale
+                        ? "Saved/exported calculation snapshot is stale because inputs changed."
+                        : calculationSummary === null || calculationSummary === undefined
+                          ? "Calculation summary is unavailable until required Builder inputs are valid."
+                          : "Calculation summary is current and ready for save/export."}
+                    </p>
                     {stoichiometryResult.ok ? (
                       <>
-                        <p
-                          className="status-line"
-                          data-testid="right-panel-summary-stoichiometry-limiting"
-                        >
-                          Limiting reactant:{" "}
-                          {stoichiometryResult.limitingReactants
-                            .map((reactant) => reactant.label)
-                            .join(", ")}
-                        </p>
-                        <p
-                          className="status-line"
-                          data-testid="right-panel-summary-stoichiometry-extent"
-                        >
-                          Reaction extent:{" "}
-                          {formatStoichiometryValue(stoichiometryResult.reactionExtentMol)}{" "}
-                          {stoichiometryResult.units.reactionExtent}
-                        </p>
+                        <section data-testid="right-panel-summary-calc-stoichiometry">
+                          <h5 className="panel-subtitle">Stoichiometry</h5>
+                          <p
+                            className="status-line"
+                            data-testid="right-panel-summary-stoichiometry-extent"
+                          >
+                            Reaction extent:{" "}
+                            {formatStoichiometryValue(stoichiometryResult.reactionExtentMol)}{" "}
+                            {stoichiometryResult.units.reactionExtent}
+                          </p>
+                          <p className="status-line">Theoretical product amounts:</p>
+                          <ul
+                            className="status-list"
+                            data-testid="right-panel-summary-stoichiometry-products"
+                          >
+                            {stoichiometryResult.participants
+                              .filter((participant) => participant.role === "product")
+                              .map((participant) => (
+                                <li key={participant.id}>
+                                  {participant.label}:{" "}
+                                  {formatStoichiometryValue(participant.theoreticalAmountMol)}{" "}
+                                  {stoichiometryResult.units.amount}
+                                </li>
+                              ))}
+                          </ul>
+                          <p className="status-line">Reactant amounts after full conversion:</p>
+                          <ul
+                            className="status-list"
+                            data-testid="right-panel-summary-stoichiometry-reactants"
+                          >
+                            {stoichiometryResult.participants
+                              .filter((participant) => participant.role === "reactant")
+                              .map((participant) => (
+                                <li key={participant.id}>
+                                  {participant.label}: remaining{" "}
+                                  {formatStoichiometryValue(participant.remainingAmountMol ?? 0)}{" "}
+                                  {stoichiometryResult.units.amount}
+                                </li>
+                              ))}
+                          </ul>
+                          {stoichiometrySummaryEntry?.warnings.length ? (
+                            <ul className="status-list">
+                              {stoichiometrySummaryEntry.warnings.map((warning, index) => (
+                                <li key={`stoichiometry-warning-${index.toString()}`}>{warning}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </section>
 
-                        <p className="status-line">Theoretical product amounts:</p>
-                        <ul
-                          className="status-list"
-                          data-testid="right-panel-summary-stoichiometry-products"
-                        >
-                          {stoichiometryResult.participants
-                            .filter((participant) => participant.role === "product")
-                            .map((participant) => (
-                              <li key={participant.id}>
-                                {participant.label}:{" "}
-                                {formatStoichiometryValue(participant.theoreticalAmountMol)}{" "}
-                                {stoichiometryResult.units.amount}
-                              </li>
-                            ))}
-                        </ul>
+                        <section data-testid="right-panel-summary-calc-limiting">
+                          <h5 className="panel-subtitle">Limiting reagent</h5>
+                          <p
+                            className="status-line"
+                            data-testid="right-panel-summary-stoichiometry-limiting"
+                          >
+                            Limiting reactant:{" "}
+                            {stoichiometryResult.limitingReactants
+                              .map((reactant) => reactant.label)
+                              .join(", ")}
+                          </p>
+                          {limitingSummaryEntry?.warnings.length ? (
+                            <ul className="status-list">
+                              {limitingSummaryEntry.warnings.map((warning, index) => (
+                                <li key={`limiting-warning-${index.toString()}`}>{warning}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </section>
 
-                        <p className="status-line">Actual product yields and percent yield:</p>
-                        <ul
-                          className="status-list"
-                          data-testid="right-panel-summary-stoichiometry-yields"
-                        >
-                          {stoichiometryResult.participants
-                            .filter((participant) => participant.role === "product")
-                            .map((participant) => (
-                              <li key={`${participant.id}-yield`}>
-                                {participant.label}: actual{" "}
-                                {formatStoichiometryValue(participant.actualYieldAmountMol ?? 0)}{" "}
-                                {stoichiometryResult.units.amount}; % yield{" "}
-                                {participant.percentYield === null
-                                  ? "n/a"
-                                  : formatStoichiometryValue(participant.percentYield)}{" "}
-                                {stoichiometryResult.units.percentYield}
-                              </li>
-                            ))}
-                        </ul>
+                        <section data-testid="right-panel-summary-calc-yield">
+                          <h5 className="panel-subtitle">Yield</h5>
+                          <p className="status-line">Actual product yields and percent yield:</p>
+                          <ul
+                            className="status-list"
+                            data-testid="right-panel-summary-stoichiometry-yields"
+                          >
+                            {stoichiometryResult.participants
+                              .filter((participant) => participant.role === "product")
+                              .map((participant) => (
+                                <li key={`${participant.id}-yield`}>
+                                  {participant.label}: actual{" "}
+                                  {formatStoichiometryValue(participant.actualYieldAmountMol ?? 0)}{" "}
+                                  {stoichiometryResult.units.amount}; % yield{" "}
+                                  {participant.percentYield === null
+                                    ? "n/a"
+                                    : formatStoichiometryValue(participant.percentYield)}{" "}
+                                  {stoichiometryResult.units.percentYield}
+                                </li>
+                              ))}
+                          </ul>
+                          {yieldSummaryEntry?.warnings.length ? (
+                            <ul className="status-list">
+                              {yieldSummaryEntry.warnings.map((warning, index) => (
+                                <li key={`yield-warning-${index.toString()}`}>{warning}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </section>
 
-                        <p className="status-line">Reactant amounts after full conversion:</p>
-                        <ul
-                          className="status-list"
-                          data-testid="right-panel-summary-stoichiometry-reactants"
-                        >
-                          {stoichiometryResult.participants
-                            .filter((participant) => participant.role === "reactant")
-                            .map((participant) => (
-                              <li key={participant.id}>
-                                {participant.label}: remaining{" "}
-                                {formatStoichiometryValue(participant.remainingAmountMol ?? 0)}{" "}
-                                {stoichiometryResult.units.amount}
-                              </li>
-                            ))}
-                        </ul>
-
-                        {stoichiometryResult.derivedCalculations.concentrations.length ===
-                        0 ? null : (
-                          <>
+                        <section data-testid="right-panel-summary-calc-concentration">
+                          <h5 className="panel-subtitle">Concentration</h5>
+                          {stoichiometryResult.derivedCalculations.concentrations.length === 0 ? (
                             <p className="status-line">
-                              Concentrations from entered amount/volume:
+                              No concentration values for current inputs.
                             </p>
-                            <ul
-                              className="status-list"
-                              data-testid="right-panel-summary-stoichiometry-concentrations"
-                            >
-                              {stoichiometryResult.derivedCalculations.concentrations.map(
-                                (concentration) => (
-                                  <li key={`${concentration.participantId}-concentration`}>
-                                    {concentration.participantLabel}:{" "}
-                                    {formatStoichiometryValue(concentration.concentrationMolL)}{" "}
-                                    {stoichiometryResult.units.concentration}
-                                  </li>
-                                ),
-                              )}
+                          ) : (
+                            <>
+                              <p className="status-line">
+                                Concentrations from entered amount/volume:
+                              </p>
+                              <ul
+                                className="status-list"
+                                data-testid="right-panel-summary-stoichiometry-concentrations"
+                              >
+                                {stoichiometryResult.derivedCalculations.concentrations.map(
+                                  (concentration) => (
+                                    <li key={`${concentration.participantId}-concentration`}>
+                                      {concentration.participantLabel}:{" "}
+                                      {formatStoichiometryValue(concentration.concentrationMolL)}{" "}
+                                      {stoichiometryResult.units.concentration}
+                                    </li>
+                                  ),
+                                )}
+                              </ul>
+                            </>
+                          )}
+                          {concentrationSummaryEntry?.warnings.length ? (
+                            <ul className="status-list">
+                              {concentrationSummaryEntry.warnings.map((warning, index) => (
+                                <li key={`concentration-warning-${index.toString()}`}>{warning}</li>
+                              ))}
                             </ul>
-                          </>
-                        )}
+                          ) : null}
+                        </section>
 
-                        {stoichiometryResult.derivedCalculations.gasRuntime === null ||
-                        stoichiometryResult.derivedCalculations.gasCalculations.length ===
-                          0 ? null : (
-                          <>
-                            <p
-                              className="status-line"
-                              data-testid="right-panel-summary-stoichiometry-gas-runtime"
-                            >
-                              Gas calculations at{" "}
-                              {formatStoichiometryValue(
-                                stoichiometryResult.derivedCalculations.gasRuntime.temperatureC,
-                              )}{" "}
-                              &deg;C and{" "}
-                              {formatStoichiometryValue(
-                                stoichiometryResult.derivedCalculations.gasRuntime.pressureAtm,
-                              )}{" "}
-                              atm (ideal gas).
+                        <section data-testid="right-panel-summary-calc-conversion">
+                          <h5 className="panel-subtitle">Gas conversion</h5>
+                          {stoichiometryResult.derivedCalculations.gasRuntime === null ||
+                          stoichiometryResult.derivedCalculations.gasCalculations.length === 0 ? (
+                            <p className="status-line">
+                              No gas conversion values for current inputs.
                             </p>
-                            <ul
-                              className="status-list"
-                              data-testid="right-panel-summary-stoichiometry-gas"
-                            >
-                              {stoichiometryResult.derivedCalculations.gasCalculations.map(
-                                (gasCalculation) => (
-                                  <li key={`${gasCalculation.participantId}-gas`}>
-                                    {gasCalculation.participantLabel}: ideal V{" "}
-                                    {formatStoichiometryValue(gasCalculation.idealVolumeL)}{" "}
-                                    {stoichiometryResult.units.volume}, implied n{" "}
-                                    {formatStoichiometryValue(
-                                      gasCalculation.impliedAmountMolFromVolume,
-                                    )}{" "}
-                                    {stoichiometryResult.units.amount}, consistency{" "}
-                                    {gasCalculation.isVolumeConsistent &&
-                                    gasCalculation.isAmountConsistent
-                                      ? "ok"
-                                      : "check inputs"}
-                                    .
-                                  </li>
-                                ),
-                              )}
+                          ) : (
+                            <>
+                              <p
+                                className="status-line"
+                                data-testid="right-panel-summary-stoichiometry-gas-runtime"
+                              >
+                                Gas calculations at{" "}
+                                {formatStoichiometryValue(
+                                  stoichiometryResult.derivedCalculations.gasRuntime.temperatureC,
+                                )}{" "}
+                                &deg;C and{" "}
+                                {formatStoichiometryValue(
+                                  stoichiometryResult.derivedCalculations.gasRuntime.pressureAtm,
+                                )}{" "}
+                                atm (ideal gas).
+                              </p>
+                              <ul
+                                className="status-list"
+                                data-testid="right-panel-summary-stoichiometry-gas"
+                              >
+                                {stoichiometryResult.derivedCalculations.gasCalculations.map(
+                                  (gasCalculation) => (
+                                    <li key={`${gasCalculation.participantId}-gas`}>
+                                      {gasCalculation.participantLabel}: ideal V{" "}
+                                      {formatStoichiometryValue(gasCalculation.idealVolumeL)}{" "}
+                                      {stoichiometryResult.units.volume}, implied n{" "}
+                                      {formatStoichiometryValue(
+                                        gasCalculation.impliedAmountMolFromVolume,
+                                      )}{" "}
+                                      {stoichiometryResult.units.amount}, consistency{" "}
+                                      {gasCalculation.isVolumeConsistent &&
+                                      gasCalculation.isAmountConsistent
+                                        ? "ok"
+                                        : "check inputs"}
+                                      .
+                                    </li>
+                                  ),
+                                )}
+                              </ul>
+                            </>
+                          )}
+                          {conversionSummaryEntry?.warnings.length ? (
+                            <ul className="status-list">
+                              {conversionSummaryEntry.warnings.map((warning, index) => (
+                                <li key={`conversion-warning-${index.toString()}`}>{warning}</li>
+                              ))}
                             </ul>
-                          </>
-                        )}
+                          ) : null}
+                        </section>
                       </>
                     ) : (
                       <>

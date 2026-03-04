@@ -123,6 +123,12 @@ struct ScenarioAmountRecord {
     concentration_mol_l: Option<f64>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct CalculationResultRecord {
+    result_type: String,
+    payload_json: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeedReport {
     pub substances_processed: usize,
@@ -819,6 +825,53 @@ impl StorageRepository {
 
         transaction.commit().map_err(|error| {
             self.sqlite_error("failed to commit scenario_amount transaction", error)
+        })
+    }
+
+    pub fn replace_calculation_results_from_value(
+        &self,
+        scenario_run_id: &str,
+        calculation_summary: Option<&Value>,
+    ) -> Result<(), StorageError> {
+        let calculation_records = parse_calculation_result_records(calculation_summary)?;
+        let mut connection = self.open()?;
+        let transaction = connection.transaction().map_err(|error| {
+            self.sqlite_error("failed to begin calculation_result transaction", error)
+        })?;
+
+        transaction
+            .execute(
+                "DELETE FROM calculation_result WHERE scenario_run_id = ?1",
+                params![scenario_run_id],
+            )
+            .map_err(|error| {
+                self.sqlite_error("failed to clear previous calculation_result rows", error)
+            })?;
+
+        for (index, record) in calculation_records.iter().enumerate() {
+            let result_id = format!("calculation-result-{scenario_run_id}-{}", index + 1);
+            transaction
+                .execute(
+                    "INSERT INTO calculation_result(
+                        id,
+                        scenario_run_id,
+                        result_type,
+                        payload_json
+                    ) VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        result_id,
+                        scenario_run_id,
+                        record.result_type.as_str(),
+                        record.payload_json.as_str()
+                    ],
+                )
+                .map_err(|error| {
+                    self.sqlite_error("failed to insert calculation_result row", error)
+                })?;
+        }
+
+        transaction.commit().map_err(|error| {
+            self.sqlite_error("failed to commit calculation_result transaction", error)
         })
     }
 
@@ -1690,6 +1743,14 @@ fn bool_to_sqlite_int(value: bool) -> i64 {
     }
 }
 
+const CALCULATION_RESULT_TYPE_ORDER: &[&str] = &[
+    "stoichiometry",
+    "limiting_reagent",
+    "yield",
+    "conversion",
+    "concentration",
+];
+
 fn parse_scenario_amount_records(
     amounts: &Value,
 ) -> Result<Vec<ScenarioAmountRecord>, StorageError> {
@@ -1731,6 +1792,286 @@ fn parse_scenario_amount_records(
     }
 
     Ok(records)
+}
+
+fn parse_calculation_result_records(
+    calculation_summary: Option<&Value>,
+) -> Result<Vec<CalculationResultRecord>, StorageError> {
+    let Some(summary) = calculation_summary else {
+        return Ok(Vec::new());
+    };
+    if summary.is_null() {
+        return Ok(Vec::new());
+    }
+
+    let summary_object = summary.as_object().ok_or_else(|| {
+        StorageError::DataInvariant("calculation summary payload must be a JSON object".to_string())
+    })?;
+    let summary_version =
+        parse_required_positive_integer_field(summary_object, "version", "calculation summary")?;
+    let entries = summary_object
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            StorageError::DataInvariant(
+                "calculation summary payload must contain `entries` array".to_string(),
+            )
+        })?;
+
+    let generated_at = parse_optional_non_empty_string_field(summary_object, "generatedAt")?;
+    let input_signature = parse_optional_non_empty_string_field(summary_object, "inputSignature")?;
+    let scenario_metadata = parse_optional_object_field(summary_object, "scenarioMetadata")?;
+    let mut payload_by_type: HashMap<String, Value> = HashMap::new();
+
+    for (index, entry) in entries.iter().enumerate() {
+        let entry_object = entry.as_object().ok_or_else(|| {
+            StorageError::DataInvariant(format!(
+                "calculation summary entry at index {index} must be a JSON object"
+            ))
+        })?;
+        let result_type = parse_calculation_result_type(entry_object, index)?;
+        let inputs = parse_required_object_entry_field(entry_object, "inputs", index)?;
+        let outputs = parse_required_object_entry_field(entry_object, "outputs", index)?;
+        let warnings = parse_string_array_entry_field(entry_object, "warnings", index)?;
+        let entry_metadata = parse_optional_object_entry_field(entry_object, "metadata", index)?;
+
+        let mut payload_object = serde_json::Map::new();
+        payload_object.insert("version".to_string(), Value::from(summary_version));
+        payload_object.insert("inputs".to_string(), Value::Object(inputs));
+        payload_object.insert("outputs".to_string(), Value::Object(outputs));
+        payload_object.insert(
+            "warnings".to_string(),
+            Value::Array(warnings.into_iter().map(Value::String).collect()),
+        );
+
+        let mut metadata = serde_json::Map::new();
+        if let Some(generated_at) = generated_at.as_ref() {
+            metadata.insert(
+                "generatedAt".to_string(),
+                Value::String(generated_at.clone()),
+            );
+        }
+        if let Some(input_signature) = input_signature.as_ref() {
+            metadata.insert(
+                "inputSignature".to_string(),
+                Value::String(input_signature.clone()),
+            );
+        }
+        if let Some(scenario_metadata) = scenario_metadata.as_ref() {
+            metadata.insert(
+                "scenario".to_string(),
+                Value::Object(scenario_metadata.clone()),
+            );
+        }
+        if let Some(entry_metadata) = entry_metadata {
+            metadata.insert("entry".to_string(), Value::Object(entry_metadata));
+        }
+        if !metadata.is_empty() {
+            payload_object.insert("metadata".to_string(), Value::Object(metadata));
+        }
+
+        payload_by_type.insert(result_type, Value::Object(payload_object));
+    }
+
+    let mut records = Vec::new();
+    for result_type in CALCULATION_RESULT_TYPE_ORDER {
+        let Some(payload) = payload_by_type.get(*result_type) else {
+            continue;
+        };
+        let payload_json = serde_json::to_string(payload).map_err(|error| {
+            StorageError::DataInvariant(format!(
+                "failed to encode calculation payload for result_type `{result_type}`: {error}"
+            ))
+        })?;
+        records.push(CalculationResultRecord {
+            result_type: (*result_type).to_string(),
+            payload_json,
+        });
+    }
+
+    Ok(records)
+}
+
+fn parse_calculation_result_type(
+    object: &serde_json::Map<String, Value>,
+    index: usize,
+) -> Result<String, StorageError> {
+    let result_type =
+        parse_required_non_empty_string_from_object(object, "resultType").map_err(|message| {
+            StorageError::DataInvariant(format!(
+                "calculation summary entry at index {index} {message}"
+            ))
+        })?;
+
+    if !CALCULATION_RESULT_TYPE_ORDER.contains(&result_type.as_str()) {
+        return Err(StorageError::DataInvariant(format!(
+            "calculation summary entry at index {index} has unsupported `resultType` `{result_type}`"
+        )));
+    }
+
+    Ok(result_type)
+}
+
+fn parse_required_positive_integer_field(
+    object: &serde_json::Map<String, Value>,
+    field_name: &str,
+    context: &str,
+) -> Result<i64, StorageError> {
+    let Some(raw_value) = object.get(field_name) else {
+        return Err(StorageError::DataInvariant(format!(
+            "{context} is missing `{field_name}`"
+        )));
+    };
+
+    let parsed = if let Some(number) = raw_value.as_i64() {
+        number
+    } else if let Some(number) = raw_value.as_u64() {
+        i64::try_from(number).map_err(|_| {
+            StorageError::DataInvariant(format!("{context} has `{field_name}` outside i64 range"))
+        })?
+    } else {
+        return Err(StorageError::DataInvariant(format!(
+            "{context} has non-integer `{field_name}`"
+        )));
+    };
+
+    if parsed <= 0 {
+        return Err(StorageError::DataInvariant(format!(
+            "{context} has non-positive `{field_name}`"
+        )));
+    }
+
+    Ok(parsed)
+}
+
+fn parse_optional_non_empty_string_field(
+    object: &serde_json::Map<String, Value>,
+    field_name: &str,
+) -> Result<Option<String>, StorageError> {
+    let Some(raw_value) = object.get(field_name) else {
+        return Ok(None);
+    };
+    if raw_value.is_null() {
+        return Ok(None);
+    }
+
+    let Some(value) = raw_value.as_str() else {
+        return Err(StorageError::DataInvariant(format!(
+            "calculation summary `{field_name}` must be a string when provided"
+        )));
+    };
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return Err(StorageError::DataInvariant(format!(
+            "calculation summary `{field_name}` must not be empty"
+        )));
+    }
+
+    Ok(Some(normalized.to_string()))
+}
+
+fn parse_optional_object_field(
+    object: &serde_json::Map<String, Value>,
+    field_name: &str,
+) -> Result<Option<serde_json::Map<String, Value>>, StorageError> {
+    let Some(raw_value) = object.get(field_name) else {
+        return Ok(None);
+    };
+    if raw_value.is_null() {
+        return Ok(None);
+    }
+    let Some(value) = raw_value.as_object() else {
+        return Err(StorageError::DataInvariant(format!(
+            "calculation summary `{field_name}` must be a JSON object when provided"
+        )));
+    };
+
+    Ok(Some(value.clone()))
+}
+
+fn parse_required_object_entry_field(
+    object: &serde_json::Map<String, Value>,
+    field_name: &str,
+    index: usize,
+) -> Result<serde_json::Map<String, Value>, StorageError> {
+    let Some(raw_value) = object.get(field_name) else {
+        return Err(StorageError::DataInvariant(format!(
+            "calculation summary entry at index {index} is missing `{field_name}`"
+        )));
+    };
+    let Some(value) = raw_value.as_object() else {
+        return Err(StorageError::DataInvariant(format!(
+            "calculation summary entry at index {index} has non-object `{field_name}`"
+        )));
+    };
+
+    Ok(value.clone())
+}
+
+fn parse_optional_object_entry_field(
+    object: &serde_json::Map<String, Value>,
+    field_name: &str,
+    index: usize,
+) -> Result<Option<serde_json::Map<String, Value>>, StorageError> {
+    let Some(raw_value) = object.get(field_name) else {
+        return Ok(None);
+    };
+    if raw_value.is_null() {
+        return Ok(None);
+    }
+    let Some(value) = raw_value.as_object() else {
+        return Err(StorageError::DataInvariant(format!(
+            "calculation summary entry at index {index} has non-object `{field_name}`"
+        )));
+    };
+
+    Ok(Some(value.clone()))
+}
+
+fn parse_string_array_entry_field(
+    object: &serde_json::Map<String, Value>,
+    field_name: &str,
+    index: usize,
+) -> Result<Vec<String>, StorageError> {
+    let Some(raw_value) = object.get(field_name) else {
+        return Err(StorageError::DataInvariant(format!(
+            "calculation summary entry at index {index} is missing `{field_name}`"
+        )));
+    };
+    let Some(values) = raw_value.as_array() else {
+        return Err(StorageError::DataInvariant(format!(
+            "calculation summary entry at index {index} has non-array `{field_name}`"
+        )));
+    };
+
+    let mut warnings = Vec::new();
+    for (warning_index, warning) in values.iter().enumerate() {
+        let Some(warning_text) = warning.as_str() else {
+            return Err(StorageError::DataInvariant(format!(
+                "calculation summary entry at index {index} has non-string warning at index {warning_index}"
+            )));
+        };
+        warnings.push(warning_text.to_string());
+    }
+
+    Ok(warnings)
+}
+
+fn parse_required_non_empty_string_from_object(
+    object: &serde_json::Map<String, Value>,
+    field_name: &str,
+) -> Result<String, String> {
+    let Some(raw_value) = object.get(field_name) else {
+        return Err(format!("is missing `{field_name}`"));
+    };
+    let Some(value) = raw_value.as_str() else {
+        return Err(format!("has non-string `{field_name}`"));
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("has empty `{field_name}`"));
+    }
+    Ok(value.to_string())
 }
 
 fn parse_required_non_empty_string(
@@ -1897,7 +2238,7 @@ fn validate_sqlite_file(path: &Path) -> Result<(), StorageError> {
 
 #[cfg(test)]
 mod tests {
-    use rusqlite::Connection;
+    use rusqlite::{params, Connection};
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -2202,6 +2543,119 @@ mod tests {
                 }
             ])
         );
+
+        let initial_calculation_summary = json!({
+            "version": 1,
+            "generatedAt": "2026-03-04T09:00:00.000Z",
+            "inputSignature": "signature-initial",
+            "scenarioMetadata": {
+                "scenarioId": "scenario-run-snapshot-1",
+                "scenarioName": "Snapshot scenario [1741089000000]"
+            },
+            "entries": [
+                {
+                    "resultType": "stoichiometry",
+                    "inputs": { "participants": [] },
+                    "outputs": { "reactionExtentMol": 1.0 },
+                    "warnings": []
+                },
+                {
+                    "resultType": "yield",
+                    "inputs": {},
+                    "outputs": { "percentYield": 95.0 },
+                    "warnings": ["Measured value from manual input."]
+                }
+            ]
+        });
+        repository
+            .replace_calculation_results_from_value(
+                "scenario-run-snapshot-1",
+                Some(&initial_calculation_summary),
+            )
+            .expect("must replace scenario calculation results");
+
+        let connection = Connection::open(repository.database_path()).expect("must open database");
+        let initial_result_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(1) FROM calculation_result WHERE scenario_run_id = ?1",
+                params!["scenario-run-snapshot-1"],
+                |row| row.get(0),
+            )
+            .expect("must query initial calculation_result count");
+        assert_eq!(initial_result_count, 2);
+
+        let yield_payload_json: String = connection
+            .query_row(
+                "SELECT payload_json
+                FROM calculation_result
+                WHERE scenario_run_id = ?1 AND result_type = 'yield'
+                LIMIT 1",
+                params!["scenario-run-snapshot-1"],
+                |row| row.get(0),
+            )
+            .expect("must query yield calculation payload");
+        let yield_payload: Value =
+            serde_json::from_str(&yield_payload_json).expect("yield payload must decode");
+        assert_eq!(
+            yield_payload,
+            json!({
+                "version": 1,
+                "inputs": {},
+                "outputs": {
+                    "percentYield": 95.0
+                },
+                "warnings": ["Measured value from manual input."],
+                "metadata": {
+                    "generatedAt": "2026-03-04T09:00:00.000Z",
+                    "inputSignature": "signature-initial",
+                    "scenario": {
+                        "scenarioId": "scenario-run-snapshot-1",
+                        "scenarioName": "Snapshot scenario [1741089000000]"
+                    }
+                }
+            })
+        );
+
+        let updated_calculation_summary = json!({
+            "version": 1,
+            "generatedAt": "2026-03-04T09:10:00.000Z",
+            "inputSignature": "signature-updated",
+            "entries": [
+                {
+                    "resultType": "conversion",
+                    "inputs": {},
+                    "outputs": {},
+                    "warnings": []
+                }
+            ]
+        });
+        repository
+            .replace_calculation_results_from_value(
+                "scenario-run-snapshot-1",
+                Some(&updated_calculation_summary),
+            )
+            .expect("must replace previous calculation_result rows");
+
+        let updated_result_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(1) FROM calculation_result WHERE scenario_run_id = ?1",
+                params!["scenario-run-snapshot-1"],
+                |row| row.get(0),
+            )
+            .expect("must query updated calculation_result count");
+        assert_eq!(updated_result_count, 1);
+
+        let updated_result_type: String = connection
+            .query_row(
+                "SELECT result_type
+                FROM calculation_result
+                WHERE scenario_run_id = ?1
+                LIMIT 1",
+                params!["scenario-run-snapshot-1"],
+                |row| row.get(0),
+            )
+            .expect("must query updated calculation_result type");
+        assert_eq!(updated_result_type, "conversion");
     }
 
     #[test]

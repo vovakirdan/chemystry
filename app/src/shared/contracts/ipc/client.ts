@@ -6,7 +6,10 @@ import {
   withFeatureFlagDefaults,
 } from "../../config/featureFlags";
 import {
+  CALCULATION_RESULT_TYPES_V1,
   BUILDER_PARTICIPANT_ROLES_V1,
+  type CalculationResultTypeV1,
+  type CalculationSummaryV1,
   type CreateSubstanceV1Input,
   type CreateSubstanceV1Output,
   type DeleteSubstanceV1Input,
@@ -88,6 +91,9 @@ const BUILDER_PARTICIPANT_ROLE_SET_V1: ReadonlySet<BuilderParticipantRoleV1> = n
   BUILDER_PARTICIPANT_ROLES_V1,
 );
 const PRECISION_PROFILE_SET_V1: ReadonlySet<PrecisionProfileV1> = new Set(PRECISION_PROFILES_V1);
+const CALCULATION_RESULT_TYPE_SET_V1: ReadonlySet<CalculationResultTypeV1> = new Set(
+  CALCULATION_RESULT_TYPES_V1,
+);
 
 function nextClientRequestId(): string {
   clientRequestSequence += 1;
@@ -646,6 +652,117 @@ function parseScenarioRuntimeSettingsV1(
   };
 }
 
+function parseCalculationResultTypeV1(
+  value: unknown,
+  requestId: string,
+  entryIndex: number,
+): CalculationResultTypeV1 {
+  if (typeof value !== "string") {
+    throw createInvalidScenarioPayloadError(
+      `Scenario calculation summary entry at index ${entryIndex.toString()} is missing resultType.`,
+      requestId,
+    );
+  }
+
+  if (!CALCULATION_RESULT_TYPE_SET_V1.has(value as CalculationResultTypeV1)) {
+    throw createInvalidScenarioPayloadError(
+      `Scenario calculation summary entry at index ${entryIndex.toString()} has unsupported resultType "${value}".`,
+      requestId,
+    );
+  }
+
+  return value as CalculationResultTypeV1;
+}
+
+function parseScenarioCalculationSummaryEntryV1(
+  candidate: unknown,
+  requestId: string,
+  entryIndex: number,
+): CalculationSummaryV1["entries"][number] {
+  if (!isRecord(candidate)) {
+    throw createInvalidScenarioPayloadError(
+      `Scenario calculation summary entry at index ${entryIndex.toString()} is not an object.`,
+      requestId,
+    );
+  }
+
+  const inputs = candidate.inputs;
+  const outputs = candidate.outputs;
+  const warnings = candidate.warnings;
+  if (!isRecord(inputs)) {
+    throw createInvalidScenarioPayloadError(
+      `Scenario calculation summary entry at index ${entryIndex.toString()} is missing object inputs.`,
+      requestId,
+    );
+  }
+  if (!isRecord(outputs)) {
+    throw createInvalidScenarioPayloadError(
+      `Scenario calculation summary entry at index ${entryIndex.toString()} is missing object outputs.`,
+      requestId,
+    );
+  }
+  if (!Array.isArray(warnings) || warnings.some((warning) => typeof warning !== "string")) {
+    throw createInvalidScenarioPayloadError(
+      `Scenario calculation summary entry at index ${entryIndex.toString()} has invalid warnings.`,
+      requestId,
+    );
+  }
+
+  return {
+    resultType: parseCalculationResultTypeV1(candidate.resultType, requestId, entryIndex),
+    inputs,
+    outputs,
+    warnings,
+  };
+}
+
+function parseScenarioCalculationSummaryV1(
+  candidate: unknown,
+  requestId: string,
+): CalculationSummaryV1 {
+  if (!isRecord(candidate)) {
+    throw createInvalidScenarioPayloadError(
+      "Scenario calculation summary is not an object.",
+      requestId,
+    );
+  }
+
+  const { version, generatedAt, inputSignature, entries } = candidate;
+  if (typeof version !== "number" || !Number.isInteger(version) || version <= 0) {
+    throw createInvalidScenarioPayloadError(
+      "Scenario calculation summary has invalid version.",
+      requestId,
+    );
+  }
+  if (typeof generatedAt !== "string" || generatedAt.trim().length === 0) {
+    throw createInvalidScenarioPayloadError(
+      "Scenario calculation summary is missing generatedAt.",
+      requestId,
+    );
+  }
+  if (typeof inputSignature !== "string" || inputSignature.length === 0) {
+    throw createInvalidScenarioPayloadError(
+      "Scenario calculation summary is missing inputSignature.",
+      requestId,
+    );
+  }
+  if (!Array.isArray(entries)) {
+    throw createInvalidScenarioPayloadError(
+      "Scenario calculation summary is missing entries list.",
+      requestId,
+    );
+  }
+
+  return {
+    version,
+    generatedAt,
+    inputSignature,
+    entries: entries.map((entry, entryIndex) =>
+      parseScenarioCalculationSummaryEntryV1(entry, requestId, entryIndex),
+    ),
+  };
+}
+
 function parseScenarioPayloadV1(candidate: unknown, requestId: string): ScenarioPayloadV1 {
   if (!isRecord(candidate)) {
     throw createInvalidScenarioPayloadError("Scenario payload is not an object.", requestId);
@@ -659,10 +776,18 @@ function parseScenarioPayloadV1(candidate: unknown, requestId: string): Scenario
     readFirstDefined(candidate, ["runtimeSettings", "runtime_settings", "runtime"]),
     requestId,
   );
+  const calculationSummaryCandidate = readFirstDefined(candidate, [
+    "calculationSummary",
+    "calculation_summary",
+  ]);
 
   return {
     builderDraft,
     runtimeSettings,
+    calculationSummary:
+      calculationSummaryCandidate === undefined || calculationSummaryCandidate === null
+        ? undefined
+        : parseScenarioCalculationSummaryV1(calculationSummaryCandidate, requestId),
   };
 }
 
@@ -1028,11 +1153,16 @@ export async function saveScenarioV1(input: SaveScenarioV1Input): Promise<SaveSc
       scenarioName: string;
       builder: ScenarioBuilderSnapshotV1;
       runtime: ScenarioRuntimeSettingsV1;
+      calculationSummary?: CalculationSummaryV1;
     } = {
       scenarioName: input.name,
       builder: input.payload.builderDraft,
       runtime: input.payload.runtimeSettings,
     };
+
+    if (input.payload.calculationSummary !== undefined) {
+      commandInput.calculationSummary = input.payload.calculationSummary;
+    }
 
     if (input.scenarioId !== undefined) {
       commandInput.scenarioId = input.scenarioId;

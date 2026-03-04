@@ -140,9 +140,33 @@ export interface ScenarioRuntimeSettingsV1 {
   fpsLimit: number | null;
 }
 
+export const CALCULATION_RESULT_TYPES_V1 = [
+  "stoichiometry",
+  "limiting_reagent",
+  "yield",
+  "conversion",
+  "concentration",
+] as const;
+export type CalculationResultTypeV1 = (typeof CALCULATION_RESULT_TYPES_V1)[number];
+
+export interface CalculationSummaryEntryV1 {
+  resultType: CalculationResultTypeV1;
+  inputs: Readonly<Record<string, unknown>>;
+  outputs: Readonly<Record<string, unknown>>;
+  warnings: ReadonlyArray<string>;
+}
+
+export interface CalculationSummaryV1 {
+  version: number;
+  generatedAt: string;
+  inputSignature: string;
+  entries: ReadonlyArray<CalculationSummaryEntryV1>;
+}
+
 export interface ScenarioPayloadV1 {
   builderDraft: ScenarioBuilderSnapshotV1;
   runtimeSettings: ScenarioRuntimeSettingsV1;
+  calculationSummary?: CalculationSummaryV1;
 }
 
 export interface ScenarioSummaryV1 {

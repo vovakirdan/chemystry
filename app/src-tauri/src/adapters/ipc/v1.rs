@@ -39,6 +39,13 @@ const DEFAULT_SCENARIO_GAS_MEDIUM: &str = "air";
 const DEFAULT_SCENARIO_PRECISION_PROFILE: &str = "balanced";
 const DEFAULT_SCENARIO_FPS_LIMIT: i64 = 60;
 const DEFAULT_SCENARIO_PARTICLE_LIMIT: i64 = 10_000;
+const CALCULATION_SUMMARY_ALLOWED_RESULT_TYPES: &[&str] = &[
+    "stoichiometry",
+    "limiting_reagent",
+    "yield",
+    "conversion",
+    "concentration",
+];
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -212,6 +219,8 @@ pub struct SaveScenarioDraftV1Input {
     pub builder: Option<Value>,
     #[serde(default)]
     pub runtime: Option<Value>,
+    #[serde(default)]
+    pub calculation_summary: Option<Value>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -263,6 +272,8 @@ pub struct LoadScenarioDraftV1Output {
     pub scenario_name: String,
     pub builder: Value,
     pub runtime: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calculation_summary: Option<Value>,
 }
 
 pub type CommandErrorV1 = CommandError;
@@ -300,6 +311,7 @@ pub struct ValidatedSaveScenarioDraftV1Input {
     pub scenario_name: String,
     pub builder: Value,
     pub runtime: Value,
+    pub calculation_summary: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -326,6 +338,8 @@ struct ScenarioDraftSnapshotV1 {
     updated_at: Option<String>,
     builder: Value,
     runtime: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    calculation_summary: Option<Value>,
 }
 
 fn validation_error(
@@ -635,6 +649,202 @@ fn validate_required_object_payload(
     Ok(payload.clone())
 }
 
+fn validate_optional_object_payload(
+    value: Option<&Value>,
+    request_id: &str,
+    field_name: &'static str,
+    invalid_code: &'static str,
+) -> CommandResult<Option<Value>> {
+    let Some(payload) = value else {
+        return Ok(None);
+    };
+
+    if payload.is_null() {
+        return Ok(None);
+    }
+    if !payload.is_object() {
+        return Err(validation_error(
+            request_id,
+            invalid_code,
+            format!("`{field_name}` must be a JSON object when provided."),
+        ));
+    }
+
+    Ok(Some(payload.clone()))
+}
+
+fn validate_calculation_summary_payload(summary: &Value, request_id: &str) -> CommandResult<()> {
+    let summary_object = summary.as_object().ok_or_else(|| {
+        validation_error(
+            request_id,
+            "SCENARIO_CALCULATION_SUMMARY_INVALID",
+            "`calculationSummary` must be a JSON object.",
+        )
+    })?;
+
+    let version = summary_object
+        .get("version")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| {
+            validation_error(
+                request_id,
+                "SCENARIO_CALCULATION_SUMMARY_INVALID",
+                "`calculationSummary.version` must be a positive integer.",
+            )
+        })?;
+    if version <= 0 {
+        return Err(validation_error(
+            request_id,
+            "SCENARIO_CALCULATION_SUMMARY_INVALID",
+            "`calculationSummary.version` must be a positive integer.",
+        ));
+    }
+
+    summary_object
+        .get("generatedAt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            validation_error(
+                request_id,
+                "SCENARIO_CALCULATION_SUMMARY_INVALID",
+                "`calculationSummary.generatedAt` must be a non-empty string.",
+            )
+        })?;
+
+    let input_signature = summary_object
+        .get("inputSignature")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            validation_error(
+                request_id,
+                "SCENARIO_CALCULATION_SUMMARY_INVALID",
+                "`calculationSummary.inputSignature` must be a non-empty string.",
+            )
+        })?;
+    let normalized_input_signature = input_signature.trim();
+    if normalized_input_signature.is_empty() || normalized_input_signature != input_signature {
+        return Err(validation_error(
+            request_id,
+            "SCENARIO_CALCULATION_SUMMARY_INVALID",
+            "`calculationSummary.inputSignature` must be non-empty and must not include leading/trailing whitespace.",
+        ));
+    }
+
+    if let Some(scenario_metadata) = summary_object.get("scenarioMetadata") {
+        if !scenario_metadata.is_null() && !scenario_metadata.is_object() {
+            return Err(validation_error(
+                request_id,
+                "SCENARIO_CALCULATION_SUMMARY_INVALID",
+                "`calculationSummary.scenarioMetadata` must be a JSON object when provided.",
+            ));
+        }
+    }
+
+    let entries = summary_object
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            validation_error(
+                request_id,
+                "SCENARIO_CALCULATION_SUMMARY_INVALID",
+                "`calculationSummary.entries` must be an array.",
+            )
+        })?;
+
+    for (index, entry) in entries.iter().enumerate() {
+        validate_calculation_summary_entry_payload(entry, index, request_id)?;
+    }
+
+    Ok(())
+}
+
+fn validate_calculation_summary_entry_payload(
+    entry: &Value,
+    index: usize,
+    request_id: &str,
+) -> CommandResult<()> {
+    let entry_object = entry.as_object().ok_or_else(|| {
+        validation_error(
+            request_id,
+            "SCENARIO_CALCULATION_SUMMARY_INVALID",
+            format!("`calculationSummary.entries[{index}]` must be a JSON object."),
+        )
+    })?;
+
+    let result_type = entry_object
+        .get("resultType")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            validation_error(
+                request_id,
+                "SCENARIO_CALCULATION_SUMMARY_INVALID",
+                format!(
+                    "`calculationSummary.entries[{index}].resultType` must be a non-empty string."
+                ),
+            )
+        })?;
+
+    if !CALCULATION_SUMMARY_ALLOWED_RESULT_TYPES.contains(&result_type) {
+        return Err(validation_error(
+            request_id,
+            "SCENARIO_CALCULATION_SUMMARY_INVALID",
+            format!(
+                "`calculationSummary.entries[{index}].resultType` has unsupported value `{result_type}`."
+            ),
+        ));
+    }
+
+    if !entry_object.get("inputs").is_some_and(Value::is_object) {
+        return Err(validation_error(
+            request_id,
+            "SCENARIO_CALCULATION_SUMMARY_INVALID",
+            format!("`calculationSummary.entries[{index}].inputs` must be a JSON object."),
+        ));
+    }
+    if !entry_object.get("outputs").is_some_and(Value::is_object) {
+        return Err(validation_error(
+            request_id,
+            "SCENARIO_CALCULATION_SUMMARY_INVALID",
+            format!("`calculationSummary.entries[{index}].outputs` must be a JSON object."),
+        ));
+    }
+
+    let warnings = entry_object
+        .get("warnings")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            validation_error(
+                request_id,
+                "SCENARIO_CALCULATION_SUMMARY_INVALID",
+                format!("`calculationSummary.entries[{index}].warnings` must be an array."),
+            )
+        })?;
+    if warnings.iter().any(|warning| !warning.is_string()) {
+        return Err(validation_error(
+            request_id,
+            "SCENARIO_CALCULATION_SUMMARY_INVALID",
+            format!("`calculationSummary.entries[{index}].warnings` must contain only strings."),
+        ));
+    }
+
+    if let Some(metadata) = entry_object.get("metadata") {
+        if !metadata.is_null() && !metadata.is_object() {
+            return Err(validation_error(
+                request_id,
+                "SCENARIO_CALCULATION_SUMMARY_INVALID",
+                format!(
+                    "`calculationSummary.entries[{index}].metadata` must be a JSON object when provided."
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 pub fn validate_save_scenario_draft_v1_input(
     input: &SaveScenarioDraftV1Input,
     request_id: &str,
@@ -647,6 +857,16 @@ pub fn validate_save_scenario_draft_v1_input(
         "SCENARIO_NAME_TOO_LONG",
         MAX_SCENARIO_NAME_LENGTH,
     )?;
+
+    let calculation_summary = validate_optional_object_payload(
+        input.calculation_summary.as_ref(),
+        request_id,
+        "calculationSummary",
+        "SCENARIO_CALCULATION_SUMMARY_INVALID",
+    )?;
+    if let Some(summary) = calculation_summary.as_ref() {
+        validate_calculation_summary_payload(summary, request_id)?;
+    }
 
     Ok(ValidatedSaveScenarioDraftV1Input {
         scenario_id: validate_optional_scenario_id(input.scenario_id.as_deref(), request_id)?,
@@ -665,6 +885,7 @@ pub fn validate_save_scenario_draft_v1_input(
             "SCENARIO_RUNTIME_REQUIRED",
             "SCENARIO_RUNTIME_INVALID",
         )?,
+        calculation_summary,
     })
 }
 
@@ -866,6 +1087,34 @@ fn extract_scenario_amounts_from_builder(builder: &Value) -> Value {
     }
 
     Value::Array(amounts)
+}
+
+fn enrich_calculation_summary_with_scenario_metadata(
+    calculation_summary: Option<&Value>,
+    scenario_id: &str,
+    scenario_name: &str,
+    saved_at: &str,
+    updated: bool,
+) -> Option<Value> {
+    let summary_object = calculation_summary?.as_object()?;
+    let mut enriched_summary = summary_object.clone();
+    let mut scenario_metadata = Map::new();
+    scenario_metadata.insert(
+        "scenarioId".to_string(),
+        Value::String(scenario_id.to_string()),
+    );
+    scenario_metadata.insert(
+        "scenarioName".to_string(),
+        Value::String(scenario_name.to_string()),
+    );
+    scenario_metadata.insert("savedAt".to_string(), Value::String(saved_at.to_string()));
+    scenario_metadata.insert("updated".to_string(), Value::Bool(updated));
+    enriched_summary.insert(
+        "scenarioMetadata".to_string(),
+        Value::Object(scenario_metadata),
+    );
+
+    Some(Value::Object(enriched_summary))
 }
 
 fn map_substance_unique_constraint_error(
@@ -1400,6 +1649,7 @@ fn save_scenario_draft_v1_with_repository(
         },
         builder: validated.builder.clone(),
         runtime: validated.runtime.clone(),
+        calculation_summary: validated.calculation_summary.clone(),
     };
     let snapshot_json = serde_json::to_string(&snapshot_payload).map_err(|error| {
         eprintln!(
@@ -1430,6 +1680,23 @@ fn save_scenario_draft_v1_with_repository(
     let scenario_amounts = extract_scenario_amounts_from_builder(&validated.builder);
     repository
         .replace_scenario_amounts_from_value(&saved_run.id, &scenario_amounts)
+        .map_err(|error| {
+            eprintln!(
+                "[ipc] storage_failure command={} request_id={} details={}",
+                SAVE_SCENARIO_DRAFT_COMMAND_NAME, request_id, error
+            );
+            map_storage_save_scenario_error(request_id, error)
+        })?;
+
+    let calculation_summary = enrich_calculation_summary_with_scenario_metadata(
+        validated.calculation_summary.as_ref(),
+        &saved_run.id,
+        &saved_run.name,
+        &saved_at,
+        updated,
+    );
+    repository
+        .replace_calculation_results_from_value(&saved_run.id, calculation_summary.as_ref())
         .map_err(|error| {
             eprintln!(
                 "[ipc] storage_failure command={} request_id={} details={}",
@@ -1581,6 +1848,7 @@ fn load_scenario_draft_v1_with_repository(
         scenario_name: run.name,
         builder: snapshot.builder,
         runtime: snapshot.runtime,
+        calculation_summary: snapshot.calculation_summary,
     })
 }
 
@@ -1897,12 +2165,59 @@ mod tests {
         })
     }
 
+    fn sample_calculation_summary_payload(signature: &str) -> Value {
+        json!({
+            "version": 1,
+            "generatedAt": "2026-03-04T09:00:00.000Z",
+            "inputSignature": signature,
+            "entries": [
+                {
+                    "resultType": "stoichiometry",
+                    "inputs": {},
+                    "outputs": {
+                        "reactionExtentMol": 1.0
+                    },
+                    "warnings": []
+                },
+                {
+                    "resultType": "limiting_reagent",
+                    "inputs": {},
+                    "outputs": {
+                        "limitingReactants": ["participant-1"]
+                    },
+                    "warnings": []
+                },
+                {
+                    "resultType": "yield",
+                    "inputs": {},
+                    "outputs": {
+                        "percentYield": 95.0
+                    },
+                    "warnings": []
+                },
+                {
+                    "resultType": "conversion",
+                    "inputs": {},
+                    "outputs": {},
+                    "warnings": ["Ideal-gas approximation"]
+                },
+                {
+                    "resultType": "concentration",
+                    "inputs": {},
+                    "outputs": {},
+                    "warnings": []
+                }
+            ]
+        })
+    }
+
     fn sample_save_input(substance_id: &str) -> SaveScenarioDraftV1Input {
         SaveScenarioDraftV1Input {
             scenario_id: None,
             scenario_name: Some("Saved Draft".to_string()),
             builder: Some(sample_builder_payload(substance_id)),
             runtime: Some(sample_runtime_payload()),
+            calculation_summary: None,
         }
     }
 
@@ -2654,6 +2969,7 @@ mod tests {
             sample_builder_payload("scenario-draft-substance-1")
         );
         assert_eq!(load_output.runtime, sample_runtime_payload());
+        assert_eq!(load_output.calculation_summary, None);
 
         let saved_amounts = repository
             .read_scenario_amounts_as_value(&save_output.scenario_id)
@@ -2710,6 +3026,7 @@ mod tests {
                 "precisionProfile": "High Precision",
                 "fpsLimit": 120
             })),
+            calculation_summary: None,
         };
         let expected_builder = update_input
             .builder
@@ -2746,6 +3063,198 @@ mod tests {
         .expect("load updated scenario should succeed");
         assert_eq!(load_output.builder, expected_builder);
         assert_eq!(load_output.runtime, expected_runtime);
+        assert_eq!(load_output.calculation_summary, None);
+    }
+
+    #[test]
+    fn save_scenario_draft_persists_and_replaces_calculation_results() {
+        let (_temp_dir, repository) =
+            setup_repository("scenario-draft-calculation-results.sqlite3");
+        create_builder_test_substance(&repository, "scenario-draft-substance-calculation");
+
+        let initial_input = SaveScenarioDraftV1Input {
+            scenario_id: None,
+            scenario_name: Some("Saved Draft".to_string()),
+            builder: Some(sample_builder_payload(
+                "scenario-draft-substance-calculation",
+            )),
+            runtime: Some(sample_runtime_payload()),
+            calculation_summary: Some(sample_calculation_summary_payload("signature-initial")),
+        };
+
+        let initial_save = save_scenario_draft_v1_with_repository(
+            &initial_input,
+            &repository,
+            "req-scenario-calculation-initial",
+        )
+        .expect("initial save with calculation summary should succeed");
+
+        let connection = Connection::open(repository.database_path()).expect("must open database");
+        let initial_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(1) FROM calculation_result WHERE scenario_run_id = ?1",
+                params![initial_save.scenario_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("must query initial calculation_result count");
+        assert_eq!(initial_count, 5);
+
+        let conversion_payload_json: String = connection
+            .query_row(
+                "SELECT payload_json
+                FROM calculation_result
+                WHERE scenario_run_id = ?1 AND result_type = 'conversion'
+                LIMIT 1",
+                params![initial_save.scenario_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("must query conversion payload");
+        let conversion_payload: Value =
+            serde_json::from_str(&conversion_payload_json).expect("payload must decode");
+        assert_eq!(
+            conversion_payload["metadata"]["inputSignature"],
+            Value::String("signature-initial".to_string())
+        );
+        assert_eq!(
+            conversion_payload["metadata"]["scenario"]["scenarioId"],
+            Value::String(initial_save.scenario_id.clone())
+        );
+        assert_eq!(
+            conversion_payload["metadata"]["scenario"]["scenarioName"],
+            Value::String(initial_save.scenario_name.clone())
+        );
+
+        let update_input = SaveScenarioDraftV1Input {
+            scenario_id: Some(initial_save.scenario_id.clone()),
+            scenario_name: Some("Saved Draft".to_string()),
+            builder: Some(sample_builder_payload(
+                "scenario-draft-substance-calculation",
+            )),
+            runtime: Some(sample_runtime_payload()),
+            calculation_summary: Some(sample_calculation_summary_payload("signature-updated")),
+        };
+        let updated_save = save_scenario_draft_v1_with_repository(
+            &update_input,
+            &repository,
+            "req-scenario-calculation-updated",
+        )
+        .expect("updated save with calculation summary should succeed");
+        assert!(updated_save.updated);
+
+        let updated_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(1) FROM calculation_result WHERE scenario_run_id = ?1",
+                params![initial_save.scenario_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("must query updated calculation_result count");
+        assert_eq!(updated_count, 5);
+
+        let stoichiometry_payload_json: String = connection
+            .query_row(
+                "SELECT payload_json
+                FROM calculation_result
+                WHERE scenario_run_id = ?1 AND result_type = 'stoichiometry'
+                LIMIT 1",
+                params![initial_save.scenario_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("must query updated stoichiometry payload");
+        let stoichiometry_payload: Value =
+            serde_json::from_str(&stoichiometry_payload_json).expect("payload must decode");
+        assert_eq!(
+            stoichiometry_payload["metadata"]["inputSignature"],
+            Value::String("signature-updated".to_string())
+        );
+    }
+
+    #[test]
+    fn save_scenario_draft_rejects_malformed_calculation_summary_without_partial_persistence() {
+        let (_temp_dir, repository) =
+            setup_repository("scenario-draft-calculation-invalid.sqlite3");
+        create_builder_test_substance(&repository, "scenario-draft-substance-calculation-invalid");
+
+        let initial_save = save_scenario_draft_v1_with_repository(
+            &sample_save_input("scenario-draft-substance-calculation-invalid"),
+            &repository,
+            "req-scenario-calculation-invalid-initial",
+        )
+        .expect("initial scenario save should succeed");
+
+        let snapshot_before = repository
+            .read_simulation_frame_summary_json(
+                &initial_save.scenario_id,
+                SCENARIO_SNAPSHOT_T_SIM_S,
+            )
+            .expect("must read snapshot before malformed save")
+            .expect("snapshot must exist before malformed save");
+        let run_before = repository
+            .get_scenario_run(&initial_save.scenario_id)
+            .expect("must query run before malformed save")
+            .expect("run must exist before malformed save");
+        let amounts_before = repository
+            .read_scenario_amounts_as_value(&initial_save.scenario_id)
+            .expect("must read scenario amounts before malformed save");
+
+        let malformed_update_input = SaveScenarioDraftV1Input {
+            scenario_id: Some(initial_save.scenario_id.clone()),
+            scenario_name: Some("Saved Draft".to_string()),
+            builder: Some(sample_builder_payload(
+                "scenario-draft-substance-calculation-invalid",
+            )),
+            runtime: Some(sample_runtime_payload()),
+            calculation_summary: Some(json!({
+                "version": 1,
+                "generatedAt": "2026-03-04T09:00:00.000Z",
+                "inputSignature": "sig-invalid",
+                "entries": [
+                    {
+                        "resultType": "stoichiometry",
+                        "inputs": {},
+                        "outputs": {},
+                        "warnings": [123]
+                    }
+                ]
+            })),
+        };
+        let error = save_scenario_draft_v1_with_repository(
+            &malformed_update_input,
+            &repository,
+            "req-scenario-calculation-invalid-update",
+        )
+        .expect_err("malformed calculation summary must be rejected");
+        assert_eq!(error.category, ErrorCategory::Validation);
+        assert_eq!(error.code, "SCENARIO_CALCULATION_SUMMARY_INVALID");
+
+        let snapshot_after = repository
+            .read_simulation_frame_summary_json(
+                &initial_save.scenario_id,
+                SCENARIO_SNAPSHOT_T_SIM_S,
+            )
+            .expect("must read snapshot after malformed save")
+            .expect("snapshot must still exist after malformed save");
+        assert_eq!(snapshot_after, snapshot_before);
+
+        let run_after = repository
+            .get_scenario_run(&initial_save.scenario_id)
+            .expect("must query run after malformed save")
+            .expect("run must still exist after malformed save");
+        assert_eq!(run_after.name, run_before.name);
+
+        let amounts_after = repository
+            .read_scenario_amounts_as_value(&initial_save.scenario_id)
+            .expect("must read scenario amounts after malformed save");
+        assert_eq!(amounts_after, amounts_before);
+
+        let connection = Connection::open(repository.database_path()).expect("must open database");
+        let calculation_result_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(1) FROM calculation_result WHERE scenario_run_id = ?1",
+                params![initial_save.scenario_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("must query calculation_result count after malformed save");
+        assert_eq!(calculation_result_count, 0);
     }
 
     #[test]
@@ -2756,6 +3265,7 @@ mod tests {
                 scenario_name: Some("  ".to_string()),
                 builder: Some(json!({"title": "draft"})),
                 runtime: Some(json!({"temperatureC": 20})),
+                calculation_summary: None,
             },
             "req-scenario-validate-empty",
         )
@@ -2769,11 +3279,198 @@ mod tests {
                 scenario_name: Some("Valid draft".to_string()),
                 builder: Some(json!("invalid-builder-shape")),
                 runtime: Some(json!({"temperatureC": 20})),
+                calculation_summary: None,
             },
             "req-scenario-validate-payload",
         )
         .expect_err("non-object builder payload must be rejected");
         assert_eq!(invalid_payload_error.category, ErrorCategory::Validation);
         assert_eq!(invalid_payload_error.code, "SCENARIO_BUILDER_INVALID");
+
+        let invalid_calculation_summary_error = validate_save_scenario_draft_v1_input(
+            &SaveScenarioDraftV1Input {
+                scenario_id: None,
+                scenario_name: Some("Valid draft".to_string()),
+                builder: Some(json!({"title": "draft"})),
+                runtime: Some(json!({"temperatureC": 20})),
+                calculation_summary: Some(json!(["invalid"])),
+            },
+            "req-scenario-validate-calculation-summary",
+        )
+        .expect_err("non-object calculation summary payload must be rejected");
+        assert_eq!(
+            invalid_calculation_summary_error.category,
+            ErrorCategory::Validation
+        );
+        assert_eq!(
+            invalid_calculation_summary_error.code,
+            "SCENARIO_CALCULATION_SUMMARY_INVALID"
+        );
+
+        let invalid_calculation_summary_entry_error = validate_save_scenario_draft_v1_input(
+            &SaveScenarioDraftV1Input {
+                scenario_id: None,
+                scenario_name: Some("Valid draft".to_string()),
+                builder: Some(json!({"title": "draft"})),
+                runtime: Some(json!({"temperatureC": 20})),
+                calculation_summary: Some(json!({
+                    "version": 1,
+                    "generatedAt": "2026-03-04T09:00:00.000Z",
+                    "inputSignature": "sig",
+                    "entries": [
+                        {
+                            "resultType": "stoichiometry",
+                            "inputs": {},
+                            "warnings": []
+                        }
+                    ]
+                })),
+            },
+            "req-scenario-validate-calculation-summary-entry",
+        )
+        .expect_err("malformed entry object must be rejected");
+        assert_eq!(
+            invalid_calculation_summary_entry_error.category,
+            ErrorCategory::Validation
+        );
+        assert_eq!(
+            invalid_calculation_summary_entry_error.code,
+            "SCENARIO_CALCULATION_SUMMARY_INVALID"
+        );
+
+        let whitespace_signature_error = validate_save_scenario_draft_v1_input(
+            &SaveScenarioDraftV1Input {
+                scenario_id: None,
+                scenario_name: Some("Valid draft".to_string()),
+                builder: Some(json!({"title": "draft"})),
+                runtime: Some(json!({"temperatureC": 20})),
+                calculation_summary: Some(json!({
+                    "version": 1,
+                    "generatedAt": "2026-03-04T09:00:00.000Z",
+                    "inputSignature": "   ",
+                    "entries": []
+                })),
+            },
+            "req-scenario-validate-calculation-summary-signature-whitespace",
+        )
+        .expect_err("whitespace-only inputSignature must be rejected");
+        assert_eq!(
+            whitespace_signature_error.category,
+            ErrorCategory::Validation
+        );
+        assert_eq!(
+            whitespace_signature_error.code,
+            "SCENARIO_CALCULATION_SUMMARY_INVALID"
+        );
+
+        let padded_signature_error = validate_save_scenario_draft_v1_input(
+            &SaveScenarioDraftV1Input {
+                scenario_id: None,
+                scenario_name: Some("Valid draft".to_string()),
+                builder: Some(json!({"title": "draft"})),
+                runtime: Some(json!({"temperatureC": 20})),
+                calculation_summary: Some(json!({
+                    "version": 1,
+                    "generatedAt": "2026-03-04T09:00:00.000Z",
+                    "inputSignature": " sig ",
+                    "entries": []
+                })),
+            },
+            "req-scenario-validate-calculation-summary-signature-padded",
+        )
+        .expect_err("padded inputSignature must be rejected");
+        assert_eq!(padded_signature_error.category, ErrorCategory::Validation);
+        assert_eq!(
+            padded_signature_error.code,
+            "SCENARIO_CALCULATION_SUMMARY_INVALID"
+        );
+
+        let invalid_scenario_metadata_error = validate_save_scenario_draft_v1_input(
+            &SaveScenarioDraftV1Input {
+                scenario_id: None,
+                scenario_name: Some("Valid draft".to_string()),
+                builder: Some(json!({"title": "draft"})),
+                runtime: Some(json!({"temperatureC": 20})),
+                calculation_summary: Some(json!({
+                    "version": 1,
+                    "generatedAt": "2026-03-04T09:00:00.000Z",
+                    "inputSignature": "sig",
+                    "scenarioMetadata": "invalid",
+                    "entries": []
+                })),
+            },
+            "req-scenario-validate-calculation-summary-scenario-metadata",
+        )
+        .expect_err("non-object scenarioMetadata must be rejected");
+        assert_eq!(
+            invalid_scenario_metadata_error.category,
+            ErrorCategory::Validation
+        );
+        assert_eq!(
+            invalid_scenario_metadata_error.code,
+            "SCENARIO_CALCULATION_SUMMARY_INVALID"
+        );
+
+        let invalid_entry_metadata_error = validate_save_scenario_draft_v1_input(
+            &SaveScenarioDraftV1Input {
+                scenario_id: None,
+                scenario_name: Some("Valid draft".to_string()),
+                builder: Some(json!({"title": "draft"})),
+                runtime: Some(json!({"temperatureC": 20})),
+                calculation_summary: Some(json!({
+                    "version": 1,
+                    "generatedAt": "2026-03-04T09:00:00.000Z",
+                    "inputSignature": "sig",
+                    "entries": [
+                        {
+                            "resultType": "stoichiometry",
+                            "inputs": {},
+                            "outputs": {},
+                            "warnings": [],
+                            "metadata": "invalid"
+                        }
+                    ]
+                })),
+            },
+            "req-scenario-validate-calculation-summary-entry-metadata",
+        )
+        .expect_err("non-object entry metadata must be rejected");
+        assert_eq!(
+            invalid_entry_metadata_error.category,
+            ErrorCategory::Validation
+        );
+        assert_eq!(
+            invalid_entry_metadata_error.code,
+            "SCENARIO_CALCULATION_SUMMARY_INVALID"
+        );
+
+        let padded_result_type_error = validate_save_scenario_draft_v1_input(
+            &SaveScenarioDraftV1Input {
+                scenario_id: None,
+                scenario_name: Some("Valid draft".to_string()),
+                builder: Some(json!({"title": "draft"})),
+                runtime: Some(json!({"temperatureC": 20})),
+                calculation_summary: Some(json!({
+                    "version": 1,
+                    "generatedAt": "2026-03-04T09:00:00.000Z",
+                    "inputSignature": "sig",
+                    "entries": [
+                        {
+                            "resultType": " stoichiometry ",
+                            "inputs": {},
+                            "outputs": {},
+                            "warnings": []
+                        }
+                    ]
+                })),
+            },
+            "req-scenario-validate-calculation-summary-entry-result-type-padded",
+        )
+        .expect_err("padded resultType token must be rejected");
+        assert_eq!(padded_result_type_error.category, ErrorCategory::Validation);
+        assert_eq!(
+            padded_result_type_error.code,
+            "SCENARIO_CALCULATION_SUMMARY_INVALID"
+        );
     }
 }

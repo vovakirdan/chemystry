@@ -4,6 +4,8 @@ import App, {
   LaunchValidationCard,
   applySimulationLifecycleCommand,
   buildLaunchValidationModel,
+  createCalculationInputSignature,
+  isCalculationSummaryStale,
 } from "./App";
 import type { BuilderDraft } from "./features/left-panel/model";
 import type { RightPanelRuntimeSettings } from "./features/right-panel/RightPanelSkeleton";
@@ -579,6 +581,30 @@ describe("App pre-run validation", () => {
     });
 
     expect(startResult.simulationControlState.isPlaying).toBe(false);
+  });
+
+  it("marks calculation summary as stale when persisted signature differs from current inputs", () => {
+    expect(isCalculationSummaryStale("sig-current", "sig-saved")).toBe(true);
+    expect(isCalculationSummaryStale("sig-current", "sig-current")).toBe(false);
+  });
+
+  it("changes calculation input signature when referenced catalog fields change", () => {
+    const draft = createValidBuilderDraft();
+    const signatureBefore = createCalculationInputSignature(draft, VALID_RUNTIME_SETTINGS, [
+      ...SAMPLE_SUBSTANCES,
+    ]);
+    const signatureAfter = createCalculationInputSignature(draft, VALID_RUNTIME_SETTINGS, [
+      {
+        ...SAMPLE_SUBSTANCES[0],
+        molarMassGMol: 2.2,
+      },
+    ]);
+
+    expect(signatureBefore).not.toBe(signatureAfter);
+  });
+
+  it("does not mark calculation summary as stale when nothing was persisted yet", () => {
+    expect(isCalculationSummaryStale("sig-current", null)).toBe(false);
   });
 });
 

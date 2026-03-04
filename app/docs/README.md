@@ -22,6 +22,7 @@
 - Stoichiometry and limiting reactant (E08-T01): `calculation-engine-e08-t01.md`
 - Reaction yield and percent yield (E08-T02): `calculation-engine-e08-t02.md`
 - Concentrations and gas calculations with T/P (E08-T03): `calculation-engine-e08-t03.md`
+- UI/storage/export integration (E08-T04): `calculation-engine-e08-t04.md`
 - Schema dump (E04-T02): `schema-dump-e04-t02.sql`
 - Schema dump (E04-T03): `schema-dump-e04-t03.sql`
 - Storage JSON fields (E04-T03): `storage-json-fields-e04-t03.md`

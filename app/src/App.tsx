@@ -57,6 +57,9 @@ import {
   updateSubstanceV1,
 } from "./shared/contracts/ipc/client";
 import type {
+  CalculationResultTypeV1,
+  CalculationSummaryEntryV1,
+  CalculationSummaryV1,
   CommandErrorV1,
   PresetCatalogEntryV1,
   ScenarioPayloadV1,
@@ -129,6 +132,15 @@ const HIGH_PRECISION_MAX_FPS = 120;
 const CUSTOM_PRECISION_MIN_PASSES = 50;
 const IDEAL_GAS_CONSTANT_L_ATM_PER_MOL_K = 0.082057338;
 const CELSIUS_TO_KELVIN_OFFSET = 273.15;
+const CALCULATION_SUMMARY_VERSION = 1;
+const CALCULATION_EXPORT_FILENAME_PREFIX = "chemystery-calculation-summary";
+const CALCULATION_RESULT_TYPE_ORDER: ReadonlyArray<CalculationResultTypeV1> = [
+  "stoichiometry",
+  "limiting_reagent",
+  "yield",
+  "conversion",
+  "concentration",
+];
 const IDEAL_GAS_APPROXIMATION_WARNING_MESSAGE =
   "Model confidence / approximation limit: gas amount-volume checks use an ideal-gas baseline in MVP.";
 const IDEAL_GAS_APPROXIMATION_WARNING_HINT =
@@ -922,6 +934,259 @@ function stripGeneratedScenarioNameSuffix(name: string): string {
   return normalized;
 }
 
+type CalculationCatalogSignatureItem = {
+  participantId: string;
+  substanceId: string;
+  name: string | null;
+  formula: string | null;
+  phase: SubstancePhaseV1 | null;
+  molarMassGMol: number | null;
+};
+
+function createCalculationCatalogSignatureContext(
+  draft: BuilderDraft | null,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): ReadonlyArray<CalculationCatalogSignatureItem> {
+  if (draft === null) {
+    return [];
+  }
+
+  return draft.participants.map((participant) => {
+    const substance =
+      substances.find((candidate) => candidate.id === participant.substanceId) ?? null;
+    return {
+      participantId: participant.id,
+      substanceId: participant.substanceId,
+      name: substance?.name ?? null,
+      formula: substance?.formula ?? null,
+      phase: substance?.phase ?? null,
+      molarMassGMol: substance?.molarMassGMol ?? null,
+    };
+  });
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function createCalculationInputSignature(
+  draft: BuilderDraft | null,
+  runtimeSettings: RightPanelRuntimeSettings,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): string {
+  const calculationCatalogContext = createCalculationCatalogSignatureContext(draft, substances);
+  return JSON.stringify({
+    builder:
+      draft === null
+        ? null
+        : {
+            title: draft.title,
+            reactionClass: draft.reactionClass,
+            equation: draft.equation,
+            description: draft.description,
+            participants: draft.participants.map((participant) => ({
+              id: participant.id,
+              substanceId: participant.substanceId,
+              role: participant.role,
+              phase: participant.phase,
+              stoichCoeffInput: participant.stoichCoeffInput,
+              amountMolInput: participant.amountMolInput,
+              massGInput: participant.massGInput,
+              volumeLInput: participant.volumeLInput,
+            })),
+          },
+    runtimeSettings: {
+      temperatureC: runtimeSettings.temperatureC,
+      pressureAtm: runtimeSettings.pressureAtm,
+      calculationPasses: runtimeSettings.calculationPasses,
+      precisionProfile: runtimeSettings.precisionProfile,
+      fpsLimit: runtimeSettings.fpsLimit,
+    },
+    catalogContext: calculationCatalogContext,
+  });
+}
+
+function buildCalculationSummaryEntries(
+  draft: BuilderDraft,
+  runtimeSettings: RightPanelRuntimeSettings,
+  stoichiometryResult: Extract<StoichiometryCalculationResult, { ok: true }>,
+): ReadonlyArray<CalculationSummaryEntryV1> {
+  const stoichiometryWarnings: string[] = [];
+  const conversionWarnings = stoichiometryResult.derivedCalculations.gasCalculations
+    .filter(
+      (gasCalculation) => !gasCalculation.isAmountConsistent || !gasCalculation.isVolumeConsistent,
+    )
+    .map(
+      (gasCalculation) =>
+        `${gasCalculation.participantLabel}: gas amount/volume inputs are inconsistent with ideal-gas runtime assumptions.`,
+    );
+
+  const entriesByType: Record<CalculationResultTypeV1, CalculationSummaryEntryV1> = {
+    stoichiometry: {
+      resultType: "stoichiometry",
+      inputs: {
+        participants: draft.participants.map((participant) => ({
+          id: participant.id,
+          role: participant.role,
+          phase: participant.phase,
+          stoichCoeffInput: participant.stoichCoeffInput,
+          amountMolInput: participant.amountMolInput,
+        })),
+      },
+      outputs: {
+        reactionExtentMol: stoichiometryResult.reactionExtentMol,
+        participants: stoichiometryResult.participants.map((participant) => ({
+          id: participant.id,
+          role: participant.role,
+          coefficient: participant.coefficient,
+          initialAmountMol: participant.initialAmountMol,
+          theoreticalAmountMol: participant.theoreticalAmountMol,
+          consumedAmountMol: participant.consumedAmountMol,
+          producedAmountMol: participant.producedAmountMol,
+          remainingAmountMol: participant.remainingAmountMol,
+        })),
+      },
+      warnings: stoichiometryWarnings,
+    },
+    limiting_reagent: {
+      resultType: "limiting_reagent",
+      inputs: {
+        reactants: stoichiometryResult.participants
+          .filter((participant) => participant.role === "reactant")
+          .map((participant) => ({
+            id: participant.id,
+            coefficient: participant.coefficient,
+            initialAmountMol: participant.initialAmountMol,
+          })),
+      },
+      outputs: {
+        limitingReactants: stoichiometryResult.limitingReactants.map((reactant) => ({
+          id: reactant.id,
+          label: reactant.label,
+          coefficient: reactant.coefficient,
+          availableAmountMol: reactant.availableAmountMol,
+          maxReactionExtentMol: reactant.maxReactionExtentMol,
+        })),
+      },
+      warnings: [],
+    },
+    yield: {
+      resultType: "yield",
+      inputs: {
+        products: stoichiometryResult.participants
+          .filter((participant) => participant.role === "product")
+          .map((participant) => ({
+            id: participant.id,
+            theoreticalAmountMol: participant.theoreticalAmountMol,
+            actualYieldAmountMol: participant.actualYieldAmountMol,
+          })),
+      },
+      outputs: {
+        products: stoichiometryResult.participants
+          .filter((participant) => participant.role === "product")
+          .map((participant) => ({
+            id: participant.id,
+            label: participant.label,
+            percentYield: participant.percentYield,
+          })),
+      },
+      warnings: [],
+    },
+    conversion: {
+      resultType: "conversion",
+      inputs: {
+        runtime: {
+          temperatureC: runtimeSettings.temperatureC,
+          pressureAtm: runtimeSettings.pressureAtm,
+        },
+        gasParticipants: draft.participants
+          .filter((participant) => participant.phase === "gas")
+          .map((participant) => ({
+            id: participant.id,
+            amountMolInput: participant.amountMolInput,
+            volumeLInput: participant.volumeLInput,
+          })),
+      },
+      outputs: {
+        gasRuntime: stoichiometryResult.derivedCalculations.gasRuntime,
+        gasCalculations: stoichiometryResult.derivedCalculations.gasCalculations,
+      },
+      warnings: conversionWarnings,
+    },
+    concentration: {
+      resultType: "concentration",
+      inputs: {
+        participants: draft.participants.map((participant) => ({
+          id: participant.id,
+          phase: participant.phase,
+          amountMolInput: participant.amountMolInput,
+          volumeLInput: participant.volumeLInput,
+        })),
+      },
+      outputs: {
+        concentrations: stoichiometryResult.derivedCalculations.concentrations,
+      },
+      warnings: [],
+    },
+  };
+
+  return CALCULATION_RESULT_TYPE_ORDER.map((resultType) => entriesByType[resultType]);
+}
+
+function buildCalculationSummary(
+  draft: BuilderDraft | null,
+  runtimeSettings: RightPanelRuntimeSettings,
+  stoichiometryResult: StoichiometryCalculationResult,
+  inputSignature: string,
+): CalculationSummaryV1 | null {
+  if (draft === null || !stoichiometryResult.ok) {
+    return null;
+  }
+
+  return {
+    version: CALCULATION_SUMMARY_VERSION,
+    generatedAt: new Date().toISOString(),
+    inputSignature,
+    entries: buildCalculationSummaryEntries(draft, runtimeSettings, stoichiometryResult),
+  };
+}
+
+function toSafeFileNameSegment(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/\s+/gu, "-");
+  const sanitized = normalized.replace(/[^a-z0-9-_]/gu, "");
+  return sanitized.length > 0 ? sanitized : "scenario";
+}
+
+function createCalculationExportFileName(baseName: string): string {
+  const now = new Date();
+  const pad = (value: number): string => value.toString().padStart(2, "0");
+  const timestamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
+  return `${CALCULATION_EXPORT_FILENAME_PREFIX}-${toSafeFileNameSegment(baseName)}-${timestamp}.json`;
+}
+
+function exportJsonToLocalFile(fileName: string, payload: unknown): void {
+  if (typeof document === "undefined" || typeof URL === "undefined") {
+    throw new Error("Local export is unavailable in the current environment.");
+  }
+
+  const json = JSON.stringify(payload, null, 2);
+  const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName;
+  anchor.rel = "noopener";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function isCalculationSummaryStale(
+  currentInputSignature: string,
+  persistedInputSignature: string | null,
+): boolean {
+  return persistedInputSignature !== null && persistedInputSignature !== currentInputSignature;
+}
+
 function cloneBuilderDraft(draft: BuilderDraft): BuilderDraft {
   return {
     ...draft,
@@ -1109,10 +1374,14 @@ function createBuilderRuntimeSnapshot(
   };
 }
 
-function createScenarioPayloadFromSnapshot(snapshot: BuilderRuntimeSnapshot): ScenarioPayloadV1 {
+function createScenarioPayloadFromSnapshot(
+  snapshot: BuilderRuntimeSnapshot,
+  calculationSummary?: CalculationSummaryV1,
+): ScenarioPayloadV1 {
   return {
     builderDraft: cloneBuilderDraft(snapshot.builderDraft),
     runtimeSettings: cloneRuntimeSettings(snapshot.runtimeSettings),
+    calculationSummary,
   };
 }
 
@@ -1184,6 +1453,8 @@ function App({ initialBuilderDraft = null }: AppProps) {
     "idle",
   );
   const [baselineSnapshot, setBaselineSnapshot] = useState<BuilderRuntimeSnapshot | null>(null);
+  const [lastPersistedCalculationInputSignature, setLastPersistedCalculationInputSignature] =
+    useState<string | null>(null);
   const [createSubstanceDraft, setCreateSubstanceDraft] = useState<UserSubstanceDraft>(
     createDefaultUserSubstanceDraft,
   );
@@ -1562,9 +1833,27 @@ function App({ initialBuilderDraft = null }: AppProps) {
     () => buildLaunchValidationModel(builderDraft, runtimeSettings, allSubstances),
     [allSubstances, builderDraft, runtimeSettings],
   );
+  const calculationInputSignature = useMemo(
+    () => createCalculationInputSignature(builderDraft, runtimeSettings, allSubstances),
+    [allSubstances, builderDraft, runtimeSettings],
+  );
   const stoichiometryResult = useMemo(
     () => buildStoichiometryResult(builderDraft, allSubstances, runtimeSettings),
     [allSubstances, builderDraft, runtimeSettings],
+  );
+  const calculationSummary = useMemo(
+    () =>
+      buildCalculationSummary(
+        builderDraft,
+        runtimeSettings,
+        stoichiometryResult,
+        calculationInputSignature,
+      ),
+    [builderDraft, calculationInputSignature, runtimeSettings, stoichiometryResult],
+  );
+  const calculationSummaryIsStale = isCalculationSummaryStale(
+    calculationInputSignature,
+    lastPersistedCalculationInputSignature,
   );
 
   const builderLaunchValidationErrors =
@@ -1725,7 +2014,7 @@ function App({ initialBuilderDraft = null }: AppProps) {
     try {
       const result = await saveScenarioV1({
         name: normalizedScenarioName,
-        payload: createScenarioPayloadFromSnapshot(snapshot),
+        payload: createScenarioPayloadFromSnapshot(snapshot, calculationSummary ?? undefined),
       });
 
       setSavedScenarios((currentScenarios) =>
@@ -1737,6 +2026,7 @@ function App({ initialBuilderDraft = null }: AppProps) {
       setSelectedScenarioId(result.scenario.id);
       setScenarioNameInput(normalizedScenarioName);
       setBaselineSnapshot(snapshot);
+      setLastPersistedCalculationInputSignature(calculationSummary?.inputSignature ?? null);
 
       try {
         const scenariosResult = await listScenariosV1();
@@ -1762,6 +2052,7 @@ function App({ initialBuilderDraft = null }: AppProps) {
     }
   }, [
     builderDraft,
+    calculationSummary,
     enqueueNotification,
     runtimeSettings,
     scenarioNameInput,
@@ -1789,6 +2080,9 @@ function App({ initialBuilderDraft = null }: AppProps) {
       setScenarioNameInput(stripGeneratedScenarioNameSuffix(result.scenarioName));
       setSelectedScenarioId(result.scenarioId);
       setBaselineSnapshot(snapshot);
+      setLastPersistedCalculationInputSignature(
+        result.payload.calculationSummary?.inputSignature ?? null,
+      );
       setBuilderCopyFeedbackMessage(null);
       enqueueNotification(
         "info",
@@ -2083,6 +2377,42 @@ function App({ initialBuilderDraft = null }: AppProps) {
     setRuntimeSettings(state);
   }, []);
 
+  const handleExportCalculationSummary = useCallback((): void => {
+    if (calculationSummary === null) {
+      enqueueNotification(
+        "warn",
+        "Calculation summary is unavailable. Complete required inputs before exporting.",
+      );
+      return;
+    }
+
+    const normalizedScenarioName = stripGeneratedScenarioNameSuffix(scenarioNameInput);
+    const normalizedBuilderTitle = builderDraft?.title.trim() ?? "";
+    const exportBaseName =
+      normalizedScenarioName.length > 0
+        ? normalizedScenarioName
+        : normalizedBuilderTitle.length > 0
+          ? normalizedBuilderTitle
+          : "scenario";
+    const exportPayload = {
+      version: calculationSummary.version,
+      exportedAt: new Date().toISOString(),
+      scenario: {
+        name: exportBaseName,
+        inputSignature: calculationSummary.inputSignature,
+      },
+      entries: calculationSummary.entries,
+    };
+
+    try {
+      exportJsonToLocalFile(createCalculationExportFileName(exportBaseName), exportPayload);
+      setLastPersistedCalculationInputSignature(calculationSummary.inputSignature);
+      enqueueNotification("info", `Calculation summary exported for "${exportBaseName}".`);
+    } catch (error: unknown) {
+      enqueueNotification("error", `Calculation summary export failed: ${String(error)}`);
+    }
+  }, [builderDraft, calculationSummary, enqueueNotification, scenarioNameInput]);
+
   const statusBarFpsLimit = runtimeSettings.fpsLimit ?? 60;
 
   return (
@@ -2243,6 +2573,9 @@ function App({ initialBuilderDraft = null }: AppProps) {
             runtimeSettings={runtimeSettings}
             onRuntimeSettingsChange={handleRuntimeSettingsChange}
             stoichiometryResult={stoichiometryResult}
+            calculationSummary={calculationSummary}
+            calculationSummaryIsStale={calculationSummaryIsStale}
+            onExportCalculationSummary={handleExportCalculationSummary}
           />
         }
       />

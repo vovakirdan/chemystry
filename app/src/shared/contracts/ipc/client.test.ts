@@ -67,6 +67,54 @@ const SAMPLE_SCENARIO_PAYLOAD = {
   },
 };
 
+const SAMPLE_CALCULATION_SUMMARY = {
+  version: 1,
+  generatedAt: "2026-03-04T09:00:00.000Z",
+  inputSignature: "sig-abc",
+  entries: [
+    {
+      resultType: "stoichiometry" as const,
+      inputs: {
+        participants: [{ id: "participant-1", amountMol: 1 }],
+      },
+      outputs: {
+        reactionExtentMol: 0.5,
+      },
+      warnings: [],
+    },
+    {
+      resultType: "limiting_reagent" as const,
+      inputs: {},
+      outputs: {
+        limitingReactants: ["participant-1"],
+      },
+      warnings: [],
+    },
+    {
+      resultType: "yield" as const,
+      inputs: {},
+      outputs: {
+        percentYield: 90,
+      },
+      warnings: [],
+    },
+    {
+      resultType: "conversion" as const,
+      inputs: {},
+      outputs: {},
+      warnings: ["Ideal-gas approximation"],
+    },
+    {
+      resultType: "concentration" as const,
+      inputs: {},
+      outputs: {
+        concentrations: [],
+      },
+      warnings: [],
+    },
+  ],
+};
+
 describe("ipc v1 client", () => {
   beforeEach(() => {
     invokeMock.mockReset();
@@ -379,7 +427,10 @@ describe("ipc v1 client", () => {
     await expect(
       saveScenarioV1({
         name: "Hydrogen what-if",
-        payload: SAMPLE_SCENARIO_PAYLOAD,
+        payload: {
+          ...SAMPLE_SCENARIO_PAYLOAD,
+          calculationSummary: SAMPLE_CALCULATION_SUMMARY,
+        },
       }),
     ).resolves.toEqual({
       version: IPC_CONTRACT_VERSION_V1,
@@ -398,6 +449,7 @@ describe("ipc v1 client", () => {
         scenarioName: "Hydrogen what-if",
         builder: SAMPLE_SCENARIO_PAYLOAD.builderDraft,
         runtime: SAMPLE_SCENARIO_PAYLOAD.runtimeSettings,
+        calculationSummary: SAMPLE_CALCULATION_SUMMARY,
       },
     });
   });
@@ -433,6 +485,7 @@ describe("ipc v1 client", () => {
       scenarioName: "Hydrogen what-if",
       builder: SAMPLE_SCENARIO_PAYLOAD.builderDraft,
       runtime: SAMPLE_SCENARIO_PAYLOAD.runtimeSettings,
+      calculationSummary: SAMPLE_CALCULATION_SUMMARY,
     });
 
     await expect(loadScenarioV1({ id: "scenario-run-saved" })).resolves.toEqual({
@@ -440,7 +493,10 @@ describe("ipc v1 client", () => {
       requestId: "req-load-scenario",
       scenarioId: "scenario-run-saved",
       scenarioName: "Hydrogen what-if",
-      payload: SAMPLE_SCENARIO_PAYLOAD,
+      payload: {
+        ...SAMPLE_SCENARIO_PAYLOAD,
+        calculationSummary: SAMPLE_CALCULATION_SUMMARY,
+      },
     });
 
     expect(invokeMock).toHaveBeenCalledWith(IPC_COMMANDS_V1.loadScenario, {
@@ -466,6 +522,37 @@ describe("ipc v1 client", () => {
     await expect(loadScenarioV1({ id: "scenario-run-saved" })).rejects.toMatchObject({
       version: IPC_CONTRACT_VERSION_V1,
       requestId: "req-load-scenario-invalid",
+      category: "internal",
+      code: "INVALID_SCENARIO_PAYLOAD",
+    });
+  });
+
+  it("rejects load_scenario_v1 payloads with invalid calculation summary shape", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-load-scenario-invalid-summary",
+      scenarioId: "scenario-run-saved",
+      scenarioName: "Hydrogen what-if",
+      builder: SAMPLE_SCENARIO_PAYLOAD.builderDraft,
+      runtime: SAMPLE_SCENARIO_PAYLOAD.runtimeSettings,
+      calculationSummary: {
+        version: 1,
+        generatedAt: "2026-03-04T09:00:00.000Z",
+        inputSignature: "sig-abc",
+        entries: [
+          {
+            resultType: "unsupported",
+            inputs: {},
+            outputs: {},
+            warnings: [],
+          },
+        ],
+      },
+    });
+
+    await expect(loadScenarioV1({ id: "scenario-run-saved" })).rejects.toMatchObject({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-load-scenario-invalid-summary",
       category: "internal",
       code: "INVALID_SCENARIO_PAYLOAD",
     });

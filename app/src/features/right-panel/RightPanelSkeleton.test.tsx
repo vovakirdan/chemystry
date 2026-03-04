@@ -6,6 +6,7 @@ import {
   STOICHIOMETRY_UNITS,
   type StoichiometryCalculationResult,
 } from "../../shared/lib/stoichiometry";
+import type { CalculationSummaryV1 } from "../../shared/contracts/ipc/v1";
 
 describe("RightPanelSkeleton runtime settings hydration", () => {
   it("keeps null runtime fields empty instead of replacing them with defaults", () => {
@@ -135,15 +136,43 @@ describe("RightPanelSkeleton stoichiometry summary", () => {
         ],
       },
     };
+    const calculationSummary: CalculationSummaryV1 = {
+      version: 1,
+      generatedAt: "2026-03-04T09:00:00.000Z",
+      inputSignature: "sig-1",
+      entries: [
+        { resultType: "stoichiometry", inputs: {}, outputs: {}, warnings: [] },
+        { resultType: "limiting_reagent", inputs: {}, outputs: {}, warnings: [] },
+        { resultType: "yield", inputs: {}, outputs: {}, warnings: [] },
+        {
+          resultType: "conversion",
+          inputs: {},
+          outputs: {},
+          warnings: ["Ideal-gas approximation"],
+        },
+        { resultType: "concentration", inputs: {}, outputs: {}, warnings: [] },
+      ],
+    };
 
     const html = renderToStaticMarkup(
       <RightPanelSkeleton
         healthMessage="ok"
         featureStatuses={[]}
         stoichiometryResult={stoichiometryResult}
+        calculationSummary={calculationSummary}
+        onExportCalculationSummary={() => {}}
       />,
     );
 
+    expect(html).toContain('data-testid="right-panel-summary-export-calculation"');
+    expect(html).toContain("Export summary (JSON)");
+    expect(html).toContain("Calculation summary is current and ready for save/export.");
+    expect(html).toContain('data-testid="right-panel-summary-calc-stoichiometry"');
+    expect(html).toContain('data-testid="right-panel-summary-calc-limiting"');
+    expect(html).toContain('data-testid="right-panel-summary-calc-yield"');
+    expect(html).toContain('data-testid="right-panel-summary-calc-concentration"');
+    expect(html).toContain('data-testid="right-panel-summary-calc-conversion"');
+    expect(html).toContain("Gas conversion");
     expect(html).toContain('data-testid="right-panel-summary-stoichiometry-limiting"');
     expect(html).toContain("Limiting reactant:");
     expect(html).toContain("O2");
@@ -161,6 +190,25 @@ describe("RightPanelSkeleton stoichiometry summary", () => {
     expect(html).toContain('data-testid="right-panel-summary-stoichiometry-gas"');
     expect(html).toContain("consistency check inputs.");
     expect(html).toContain("Units: amounts and reaction extent in");
+  });
+
+  it("renders stale summary status when inputs changed after previous save/export", () => {
+    const html = renderToStaticMarkup(
+      <RightPanelSkeleton
+        healthMessage="ok"
+        featureStatuses={[]}
+        stoichiometryResult={{
+          ok: false,
+          units: STOICHIOMETRY_UNITS,
+          assumptions: STOICHIOMETRY_ASSUMPTIONS,
+          errors: [],
+        }}
+        calculationSummary={null}
+        calculationSummaryIsStale
+      />,
+    );
+
+    expect(html).toContain("Saved/exported calculation snapshot is stale because inputs changed.");
   });
 
   it("renders explicit validation errors when stoichiometry input is incomplete", () => {
