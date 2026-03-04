@@ -18,6 +18,7 @@
 - Simulation lifecycle start/pause/reset (E06-T05): `manual-reaction-builder-e06-t05.md`
 - Units and conversion module (E07-T01): `units-conversions-e07-t01.md`
 - Dimensional validation and input normalization (E07-T02): `units-validation-e07-t02.md`
+- Validation UX and model-limit warnings (E07-T03): `validation-ux-e07-t03.md`
 - Schema dump (E04-T02): `schema-dump-e04-t02.sql`
 - Schema dump (E04-T03): `schema-dump-e04-t03.sql`
 - Storage JSON fields (E04-T03): `storage-json-fields-e04-t03.md`

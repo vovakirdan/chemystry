@@ -314,6 +314,11 @@ a:focus-visible {
   background: var(--color-error-soft);
 }
 
+.launch-validation-card--warning {
+  border-color: #e8cb9a;
+  background: var(--color-warn-soft);
+}
+
 .launch-validation-card--ready {
   border-color: #b4d0b9;
   background: #f0fbf2;
@@ -342,17 +347,51 @@ a:focus-visible {
 }
 
 .launch-validation-section p,
-.launch-validation-section ul {
+.launch-validation-issue-list {
   margin: 0;
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
 }
 
-.launch-validation-section ul {
-  padding-left: 1rem;
+.launch-validation-issue-list {
+  list-style: none;
+  padding-left: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
+  gap: 0.35rem;
+}
+
+.launch-validation-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.1rem 0.45rem;
+  align-items: start;
+}
+
+.launch-validation-item-severity {
+  border-radius: 999px;
+  padding: 0.08rem 0.38rem;
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  line-height: 1.35;
+}
+
+.launch-validation-item-severity--error {
+  background: var(--color-error-soft);
+  color: var(--color-error);
+}
+
+.launch-validation-item-severity--warning {
+  background: #fff4d8;
+  color: #755000;
+}
+
+.launch-validation-item-hint {
+  grid-column: 2;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
 }
 
 .status-list {

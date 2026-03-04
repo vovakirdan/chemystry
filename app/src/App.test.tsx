@@ -1,6 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import App, { applySimulationLifecycleCommand, buildLaunchValidationModel } from "./App";
+import App, {
+  LaunchValidationCard,
+  applySimulationLifecycleCommand,
+  buildLaunchValidationModel,
+} from "./App";
 import type { BuilderDraft } from "./features/left-panel/model";
 import type { RightPanelRuntimeSettings } from "./features/right-panel/RightPanelSkeleton";
 import type { SubstanceCatalogEntryV1 } from "./shared/contracts/ipc/v1";
@@ -56,6 +60,64 @@ function createBuilderDraftWithRawId(overrides: Partial<BuilderDraft> = {}): Bui
   };
 }
 
+function createValidBuilderDraft(overrides: Partial<BuilderDraft> = {}): BuilderDraft {
+  return createBuilderDraftWithRawId({
+    participants: [
+      {
+        id: "participant-valid-1",
+        substanceId: "builtin-substance-hydrogen",
+        role: "reactant",
+        stoichCoeffInput: "1",
+        phase: "gas",
+        amountMolInput: "1",
+        massGInput: "2.01588",
+        volumeLInput: "22.4",
+      },
+      {
+        id: "participant-valid-2",
+        substanceId: "builtin-substance-hydrogen",
+        role: "product",
+        stoichCoeffInput: "1",
+        phase: "gas",
+        amountMolInput: "1",
+        massGInput: "2.01588",
+        volumeLInput: "22.4",
+      },
+    ],
+    ...overrides,
+  });
+}
+
+function createBuilderDraftWithNonNumericGasInputs(
+  overrides: Partial<BuilderDraft> = {},
+): BuilderDraft {
+  return createBuilderDraftWithRawId({
+    participants: [
+      {
+        id: "participant-nonnumeric-gas",
+        substanceId: "builtin-substance-hydrogen",
+        role: "reactant",
+        stoichCoeffInput: "1",
+        phase: "gas",
+        amountMolInput: "abc",
+        massGInput: "2.01588",
+        volumeLInput: "def",
+      },
+      {
+        id: "participant-liquid-product",
+        substanceId: "builtin-substance-hydrogen",
+        role: "product",
+        stoichCoeffInput: "1",
+        phase: "liquid",
+        amountMolInput: "1",
+        massGInput: "2.01588",
+        volumeLInput: "1",
+      },
+    ],
+    ...overrides,
+  });
+}
+
 describe("App pre-run validation", () => {
   it("renders grouped validation sections and blocks Play when checks fail", () => {
     const html = renderToStaticMarkup(<App />);
@@ -78,6 +140,7 @@ describe("App pre-run validation", () => {
     expect(html).toContain("Play is blocked until the issues below are fixed.");
     expect(html).toContain("Load a preset in Builder");
     expect(html).not.toContain("Stoich coeff");
+    expect(html).toContain("Error");
   });
 
   it("removes greeting demo/template visuals from center panel", () => {
@@ -273,36 +336,131 @@ describe("App pre-run validation", () => {
     expect(invalidValidation.hasErrors).toBe(true);
 
     const validValidation = buildLaunchValidationModel(
-      createBuilderDraftWithRawId({
-        participants: [
-          {
-            id: "participant-raw-id-1",
-            substanceId: "builtin-substance-hydrogen",
-            role: "reactant",
-            stoichCoeffInput: "1",
-            phase: "gas",
-            amountMolInput: "1",
-            massGInput: "2.01588",
-            volumeLInput: "22.4",
-          },
-          {
-            id: "participant-raw-id-2",
-            substanceId: "builtin-substance-hydrogen",
-            role: "product",
-            stoichCoeffInput: "1",
-            phase: "gas",
-            amountMolInput: "1",
-            massGInput: "2.01588",
-            volumeLInput: "22.4",
-          },
-        ],
-      }),
+      createValidBuilderDraft(),
       VALID_RUNTIME_SETTINGS,
       SAMPLE_SUBSTANCES,
     );
 
     expect(validValidation.hasErrors).toBe(false);
     expect(validValidation.firstError).toBeNull();
+  });
+
+  it("shows model-limitation warning with explain hint and keeps Play unblocked", () => {
+    const validation = buildLaunchValidationModel(
+      createValidBuilderDraft(),
+      VALID_RUNTIME_SETTINGS,
+      SAMPLE_SUBSTANCES,
+    );
+    const builderSection = validation.sections.find((section) => section.id === "builder");
+    const warningMessage = builderSection?.warnings[0]?.message ?? "";
+    const warningHint = builderSection?.warnings[0]?.explainHint ?? "";
+
+    expect(validation.hasErrors).toBe(false);
+    expect(validation.hasWarnings).toBe(true);
+    expect(warningMessage).toContain("Model confidence / approximation limit");
+    expect(warningHint).toContain("22.4 L/mol");
+
+    const startResult = applySimulationLifecycleCommand({
+      command: "start",
+      simulationControlState: {
+        isPlaying: false,
+        timelinePosition: 12,
+      },
+      runtimeSettings: VALID_RUNTIME_SETTINGS,
+      builderDraft: createValidBuilderDraft(),
+      launchBlocked: validation.hasErrors,
+      baselineSnapshot: null,
+    });
+
+    expect(startResult.simulationControlState.isPlaying).toBe(true);
+  });
+
+  it("does not show approximation warning when gas amount/volume inputs are non-numeric", () => {
+    const validation = buildLaunchValidationModel(
+      createBuilderDraftWithNonNumericGasInputs(),
+      VALID_RUNTIME_SETTINGS,
+      SAMPLE_SUBSTANCES,
+    );
+    const builderSection = validation.sections.find((section) => section.id === "builder");
+    const builderWarnings = builderSection?.warnings ?? [];
+
+    expect(validation.hasErrors).toBe(true);
+    expect(builderWarnings).toHaveLength(0);
+    expect(validation.hasWarnings).toBe(false);
+  });
+
+  it("renders explain hint in the unified warning list format", () => {
+    const validation = buildLaunchValidationModel(
+      createValidBuilderDraft(),
+      VALID_RUNTIME_SETTINGS,
+      SAMPLE_SUBSTANCES,
+    );
+    const html = renderToStaticMarkup(<LaunchValidationCard model={validation} />);
+
+    expect(html).toContain("Play is ready. Review warnings and approximation limits below.");
+    expect(html).toContain("Warning");
+    expect(html).toContain("Model confidence / approximation limit");
+    expect(html).toContain("Explain:");
+  });
+
+  it("keeps blocked-card style precedence when errors and warnings are both present", () => {
+    const validation = buildLaunchValidationModel(
+      createBuilderDraftWithRawId(),
+      VALID_RUNTIME_SETTINGS,
+      SAMPLE_SUBSTANCES,
+    );
+    const html = renderToStaticMarkup(<LaunchValidationCard model={validation} />);
+
+    expect(validation.hasErrors).toBe(true);
+    expect(validation.hasWarnings).toBe(true);
+    expect(html).toContain("launch-validation-card launch-validation-card--blocked");
+    expect(html).not.toContain("launch-validation-card--warning");
+  });
+
+  it("deduplicates repeated launch errors and warnings", () => {
+    const validation = buildLaunchValidationModel(
+      createBuilderDraftWithRawId(),
+      VALID_RUNTIME_SETTINGS,
+      SAMPLE_SUBSTANCES,
+    );
+    const builderSection = validation.sections.find((section) => section.id === "builder");
+    const builderErrors = builderSection?.errors ?? [];
+    const builderWarnings = builderSection?.warnings ?? [];
+
+    const repeatedCoeffErrors = builderErrors.filter(
+      (message) =>
+        message === "Participant 1 (Hydrogen): reaction coefficient must be greater than 0.",
+    );
+    const repeatedModelLimitWarnings = builderWarnings.filter((warning) =>
+      warning.message.includes("Model confidence / approximation limit"),
+    );
+
+    expect(repeatedCoeffErrors).toHaveLength(1);
+    expect(repeatedModelLimitWarnings).toHaveLength(1);
+  });
+
+  it("keeps launch blocked when blocking errors are present", () => {
+    const validation = buildLaunchValidationModel(
+      createBuilderDraftWithRawId(),
+      VALID_RUNTIME_SETTINGS,
+      SAMPLE_SUBSTANCES,
+    );
+
+    expect(validation.hasErrors).toBe(true);
+
+    const startResult = applySimulationLifecycleCommand({
+      command: "start",
+      simulationControlState: {
+        isPlaying: false,
+        timelinePosition: 5,
+      },
+      runtimeSettings: VALID_RUNTIME_SETTINGS,
+      builderDraft: createBuilderDraftWithRawId(),
+      launchBlocked: validation.hasErrors,
+      baselineSnapshot: null,
+    });
+
+    expect(startResult.simulationControlState.isPlaying).toBe(false);
   });
 });
 

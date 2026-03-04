@@ -123,18 +123,38 @@ const MIN_FPS_LIMIT = 15;
 const MAX_FPS_LIMIT = 240;
 const HIGH_PRECISION_MAX_FPS = 120;
 const CUSTOM_PRECISION_MIN_PASSES = 50;
+const IDEAL_GAS_APPROXIMATION_WARNING_MESSAGE =
+  "Model confidence / approximation limit: gas amount-volume checks use an ideal-gas baseline in MVP.";
+const IDEAL_GAS_APPROXIMATION_WARNING_HINT =
+  "Checks assume 22.4 L/mol at standard conditions and do not model non-ideal behavior or runtime temperature/pressure shifts yet.";
 
 type LaunchValidationSectionId = "builder" | "environment" | "calculations";
+
+type LaunchValidationSeverity = "error" | "warning";
+
+type LaunchValidationWarningItem = {
+  message: string;
+  explainHint: string | null;
+};
+
+type LaunchValidationItem = {
+  severity: LaunchValidationSeverity;
+  message: string;
+  explainHint: string | null;
+};
 
 type LaunchValidationSection = {
   id: LaunchValidationSectionId;
   title: string;
   errors: ReadonlyArray<string>;
+  warnings: ReadonlyArray<LaunchValidationWarningItem>;
+  items: ReadonlyArray<LaunchValidationItem>;
 };
 
 type LaunchValidationModel = {
   sections: ReadonlyArray<LaunchValidationSection>;
   hasErrors: boolean;
+  hasWarnings: boolean;
   firstError: string | null;
 };
 
@@ -348,6 +368,38 @@ function collectBuilderValidationErrors(
   return Array.from(errors);
 }
 
+function collectBuilderValidationWarnings(
+  draft: BuilderDraft | null,
+): ReadonlyArray<LaunchValidationWarningItem> {
+  if (draft === null) {
+    return [];
+  }
+
+  const warnings: LaunchValidationWarningItem[] = [];
+  for (const participant of draft.participants) {
+    if (participant.phase !== "gas") {
+      continue;
+    }
+
+    const parsedAmountMol = parseNormalizedNumberInput(participant.amountMolInput);
+    if (!parsedAmountMol.ok) {
+      continue;
+    }
+
+    const parsedVolumeL = parseNormalizedNumberInput(participant.volumeLInput);
+    if (!parsedVolumeL.ok) {
+      continue;
+    }
+
+    warnings.push({
+      message: IDEAL_GAS_APPROXIMATION_WARNING_MESSAGE,
+      explainHint: IDEAL_GAS_APPROXIMATION_WARNING_HINT,
+    });
+  }
+
+  return warnings;
+}
+
 function collectEnvironmentValidationErrors(
   settings: RightPanelRuntimeSettings,
 ): ReadonlyArray<string> {
@@ -416,6 +468,66 @@ function collectCalculationsValidationErrors(
   return errors;
 }
 
+function toLaunchValidationItemKey(item: LaunchValidationItem): string {
+  return `${item.severity}\u0000${item.message}\u0000${item.explainHint ?? ""}`;
+}
+
+function dedupeLaunchValidationItems(
+  items: ReadonlyArray<LaunchValidationItem>,
+): ReadonlyArray<LaunchValidationItem> {
+  const localSeenIssueKeys = new Set<string>();
+  const dedupedItems: LaunchValidationItem[] = [];
+
+  for (const item of items) {
+    const key = toLaunchValidationItemKey(item);
+    if (localSeenIssueKeys.has(key)) {
+      continue;
+    }
+
+    localSeenIssueKeys.add(key);
+    dedupedItems.push(item);
+  }
+
+  return dedupedItems;
+}
+
+function buildLaunchValidationSection(
+  id: LaunchValidationSectionId,
+  title: string,
+  errors: ReadonlyArray<string>,
+  warnings: ReadonlyArray<LaunchValidationWarningItem>,
+): LaunchValidationSection {
+  const dedupedItems = dedupeLaunchValidationItems([
+    ...errors.map(
+      (message): LaunchValidationItem => ({
+        severity: "error",
+        message,
+        explainHint: null,
+      }),
+    ),
+    ...warnings.map(
+      (warning): LaunchValidationItem => ({
+        severity: "warning",
+        message: warning.message,
+        explainHint: warning.explainHint,
+      }),
+    ),
+  ]);
+
+  return {
+    id,
+    title,
+    errors: dedupedItems.filter((item) => item.severity === "error").map((item) => item.message),
+    warnings: dedupedItems
+      .filter((item) => item.severity === "warning")
+      .map((item) => ({
+        message: item.message,
+        explainHint: item.explainHint,
+      })),
+    items: dedupedItems,
+  };
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export function buildLaunchValidationModel(
   builderDraft: BuilderDraft | null,
@@ -423,38 +535,107 @@ export function buildLaunchValidationModel(
   substances: ReadonlyArray<SubstanceCatalogEntryV1> = [],
 ): LaunchValidationModel {
   const sections: ReadonlyArray<LaunchValidationSection> = [
-    {
-      id: "builder",
-      title: "Builder",
-      errors: collectBuilderValidationErrors(builderDraft, substances),
-    },
-    {
-      id: "environment",
-      title: "Environment",
-      errors: collectEnvironmentValidationErrors(runtimeSettings),
-    },
-    {
-      id: "calculations",
-      title: "Calculations",
-      errors: collectCalculationsValidationErrors(runtimeSettings),
-    },
+    buildLaunchValidationSection(
+      "builder",
+      "Builder",
+      collectBuilderValidationErrors(builderDraft, substances),
+      collectBuilderValidationWarnings(builderDraft),
+    ),
+    buildLaunchValidationSection(
+      "environment",
+      "Environment",
+      collectEnvironmentValidationErrors(runtimeSettings),
+      [],
+    ),
+    buildLaunchValidationSection(
+      "calculations",
+      "Calculations",
+      collectCalculationsValidationErrors(runtimeSettings),
+      [],
+    ),
   ];
 
-  for (const section of sections) {
-    if (section.errors.length > 0) {
-      return {
-        sections,
-        hasErrors: true,
-        firstError: section.errors[0] ?? null,
-      };
-    }
-  }
+  const firstError =
+    sections.flatMap((section) => section.errors).find((error) => error.length > 0) ?? null;
+  const hasWarnings = sections.some((section) => section.warnings.length > 0);
 
   return {
     sections,
-    hasErrors: false,
-    firstError: null,
+    hasErrors: firstError !== null,
+    hasWarnings,
+    firstError,
   };
+}
+
+type LaunchValidationCardProps = {
+  model: LaunchValidationModel;
+};
+
+function launchValidationSeverityLabel(severity: LaunchValidationSeverity): string {
+  return severity === "error" ? "Error" : "Warning";
+}
+
+export function LaunchValidationCard({ model }: LaunchValidationCardProps) {
+  return (
+    <section
+      id="pre-run-validation"
+      className={`content-card launch-validation-card${model.hasErrors ? " launch-validation-card--blocked" : model.hasWarnings ? " launch-validation-card--warning" : " launch-validation-card--ready"}`}
+      aria-label="Pre-run validation card"
+      data-testid="launch-validation-card"
+    >
+      <h2>Pre-run checks</h2>
+      <p data-testid="launch-validation-status">
+        {model.hasErrors
+          ? "Play is blocked until the issues below are fixed."
+          : model.hasWarnings
+            ? "Play is ready. Review warnings and approximation limits below."
+            : "All checks passed. Play is ready."}
+      </p>
+      <div className="launch-validation-groups" data-testid="launch-validation-groups">
+        {model.sections.map((section) => (
+          <section
+            key={section.id}
+            className="launch-validation-section"
+            data-testid={`launch-validation-section-${section.id}`}
+          >
+            <h3>{section.title}</h3>
+            {section.items.length === 0 ? (
+              <p data-testid={`launch-validation-ok-${section.id}`}>No issues.</p>
+            ) : (
+              <ul
+                className="launch-validation-issue-list"
+                data-testid={`launch-validation-errors-${section.id}`}
+              >
+                {section.items.map((item, index) => (
+                  <li
+                    key={`${section.id}-validation-item-${index.toString()}`}
+                    className={`launch-validation-item launch-validation-item--${item.severity}`}
+                    data-testid={`launch-validation-item-${section.id}-${index.toString()}`}
+                  >
+                    <span
+                      className={`launch-validation-item-severity launch-validation-item-severity--${item.severity}`}
+                      data-testid={`launch-validation-item-severity-${section.id}-${index.toString()}`}
+                    >
+                      {launchValidationSeverityLabel(item.severity)}
+                    </span>
+                    <span>{item.message}</span>
+                    {item.explainHint === null ? null : (
+                      <span
+                        className="launch-validation-item-hint"
+                        data-testid={`launch-validation-item-hint-${section.id}-${index.toString()}`}
+                      >
+                        Explain: {item.explainHint}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function readStoredLeftPanelTab(): LeftPanelTabId {
@@ -1943,41 +2124,7 @@ function App() {
               </p>
             </section>
 
-            <section
-              id="pre-run-validation"
-              className={`content-card launch-validation-card${launchValidationModel.hasErrors ? " launch-validation-card--blocked" : " launch-validation-card--ready"}`}
-              aria-label="Pre-run validation card"
-              data-testid="launch-validation-card"
-            >
-              <h2>Pre-run checks</h2>
-              <p data-testid="launch-validation-status">
-                {launchValidationModel.hasErrors
-                  ? "Play is blocked until the issues below are fixed."
-                  : "All checks passed. Play is ready."}
-              </p>
-              <div className="launch-validation-groups" data-testid="launch-validation-groups">
-                {launchValidationModel.sections.map((section) => (
-                  <section
-                    key={section.id}
-                    className="launch-validation-section"
-                    data-testid={`launch-validation-section-${section.id}`}
-                  >
-                    <h3>{section.title}</h3>
-                    {section.errors.length === 0 ? (
-                      <p data-testid={`launch-validation-ok-${section.id}`}>No issues.</p>
-                    ) : (
-                      <ul data-testid={`launch-validation-errors-${section.id}`}>
-                        {section.errors.map((error, index) => (
-                          <li key={`${section.id}-validation-error-${index.toString()}`}>
-                            {error}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </section>
-                ))}
-              </div>
-            </section>
+            <LaunchValidationCard model={launchValidationModel} />
 
             <section id="backend-health" className="content-card" aria-label="Backend health card">
               <h2>Backend health</h2>
