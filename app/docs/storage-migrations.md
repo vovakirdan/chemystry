@@ -1,4 +1,4 @@
-# Storage Migrations (E04-T01)
+# Storage Migrations (E04)
 
 ## Policy
 
@@ -19,7 +19,10 @@
 
 - `0001_init_storage_metadata`: creates `app_metadata`.
 - `0002_create_core_chemical_data`: creates `substance`, `reaction_template`, `reaction_species` with FK/unique/check constraints.
-- Review artifact: `schema-dump-e04-t02.sql`.
+- `0003_create_scenario_calculation_import_data`: creates `scenario_run`, `scenario_amount`, `simulation_frame_summary`, `calculation_result`, `import_job` with FK/unique/check constraints and query indexes for `scenario_run_id`/`created_at`.
+- Review artifacts:
+  - `schema-dump-e04-t03.sql`
+  - `storage-json-fields-e04-t03.md`
 
 ## Failure Recovery
 

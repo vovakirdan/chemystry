@@ -64,6 +64,88 @@ CREATE INDEX IF NOT EXISTS idx_reaction_species_substance_id
     ON reaction_species(substance_id);
 "#;
 
+const MIGRATION_0003_SCENARIO_CALCULATION_IMPORT_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS scenario_run (
+    id TEXT PRIMARY KEY CHECK (length(id) > 0),
+    reaction_template_id TEXT,
+    name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    temperature_k REAL NOT NULL CHECK (temperature_k > 0),
+    pressure_pa REAL NOT NULL CHECK (pressure_pa > 0),
+    gas_medium TEXT NOT NULL CHECK (length(trim(gas_medium)) > 0),
+    precision_profile TEXT NOT NULL CHECK (precision_profile IN ('balanced', 'high_precision', 'custom')),
+    fps_limit INTEGER NOT NULL CHECK (fps_limit > 0),
+    particle_limit INTEGER NOT NULL CHECK (particle_limit > 0),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (reaction_template_id) REFERENCES reaction_template(id) ON UPDATE CASCADE ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS scenario_amount (
+    id TEXT PRIMARY KEY CHECK (length(id) > 0),
+    scenario_run_id TEXT NOT NULL,
+    substance_id TEXT NOT NULL,
+    amount_mol REAL CHECK (amount_mol IS NULL OR amount_mol > 0),
+    mass_g REAL CHECK (mass_g IS NULL OR mass_g > 0),
+    volume_l REAL CHECK (volume_l IS NULL OR volume_l > 0),
+    concentration_mol_l REAL CHECK (concentration_mol_l IS NULL OR concentration_mol_l > 0),
+    CHECK (
+        amount_mol IS NOT NULL
+        OR mass_g IS NOT NULL
+        OR volume_l IS NOT NULL
+        OR concentration_mol_l IS NOT NULL
+    ),
+    FOREIGN KEY (scenario_run_id) REFERENCES scenario_run(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    FOREIGN KEY (substance_id) REFERENCES substance(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+    UNIQUE(scenario_run_id, substance_id)
+);
+
+CREATE TABLE IF NOT EXISTS simulation_frame_summary (
+    id TEXT PRIMARY KEY CHECK (length(id) > 0),
+    scenario_run_id TEXT NOT NULL,
+    t_sim_s REAL NOT NULL CHECK (t_sim_s >= 0),
+    key_metrics_json TEXT NOT NULL CHECK (length(trim(key_metrics_json)) > 0),
+    FOREIGN KEY (scenario_run_id) REFERENCES scenario_run(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    UNIQUE(scenario_run_id, t_sim_s)
+);
+
+CREATE TABLE IF NOT EXISTS calculation_result (
+    id TEXT PRIMARY KEY CHECK (length(id) > 0),
+    scenario_run_id TEXT NOT NULL,
+    result_type TEXT NOT NULL CHECK (
+        result_type IN ('stoichiometry', 'limiting_reagent', 'yield', 'conversion', 'concentration')
+    ),
+    payload_json TEXT NOT NULL CHECK (length(trim(payload_json)) > 0),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (scenario_run_id) REFERENCES scenario_run(id) ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS import_job (
+    id TEXT PRIMARY KEY CHECK (length(id) > 0),
+    format TEXT NOT NULL CHECK (format IN ('sdf_mol', 'smiles', 'xyz')),
+    file_path TEXT NOT NULL CHECK (length(trim(file_path)) > 0),
+    status TEXT NOT NULL CHECK (status IN ('success', 'failed', 'partial')),
+    warnings_json TEXT NOT NULL CHECK (length(trim(warnings_json)) > 0),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_scenario_run_created_at
+    ON scenario_run(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_scenario_amount_scenario_run_id
+    ON scenario_amount(scenario_run_id);
+
+CREATE INDEX IF NOT EXISTS idx_simulation_frame_summary_scenario_run_id
+    ON simulation_frame_summary(scenario_run_id);
+
+CREATE INDEX IF NOT EXISTS idx_calculation_result_scenario_run_id
+    ON calculation_result(scenario_run_id);
+
+CREATE INDEX IF NOT EXISTS idx_calculation_result_created_at
+    ON calculation_result(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_import_job_created_at
+    ON import_job(created_at);
+"#;
+
 #[derive(Debug, Clone, Copy)]
 struct Migration {
     version: i64,
@@ -81,6 +163,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 2,
         name: "0002_create_core_chemical_data",
         sql: MIGRATION_0002_CORE_CHEMICAL_DATA_SQL,
+    },
+    Migration {
+        version: 3,
+        name: "0003_create_scenario_calculation_import_data",
+        sql: MIGRATION_0003_SCENARIO_CALCULATION_IMPORT_SQL,
     },
 ];
 
@@ -400,6 +487,23 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    const E04_T03_TABLES: &[&str] = &[
+        "scenario_run",
+        "scenario_amount",
+        "calculation_result",
+        "simulation_frame_summary",
+        "import_job",
+    ];
+
+    const E04_T03_INDEXES: &[&str] = &[
+        "idx_scenario_run_created_at",
+        "idx_scenario_amount_scenario_run_id",
+        "idx_simulation_frame_summary_scenario_run_id",
+        "idx_calculation_result_scenario_run_id",
+        "idx_calculation_result_created_at",
+        "idx_import_job_created_at",
+    ];
+
     const TEST_MIGRATION_0001_SQL: &str = r#"
 CREATE TABLE baseline_table (
     id INTEGER PRIMARY KEY,
@@ -421,7 +525,7 @@ THIS IS NOT VALID SQL;
         let database_path = temp_dir.path().join("nested").join("clean.sqlite3");
 
         let first_run = run_migrations(&database_path).expect("migrations should succeed");
-        assert_eq!(first_run.applied_versions, vec![1, 2]);
+        assert_eq!(first_run.applied_versions, vec![1, 2, 3]);
 
         assert!(
             table_exists(&database_path, "schema_migrations"),
@@ -443,12 +547,67 @@ THIS IS NOT VALID SQL;
             table_exists(&database_path, "reaction_species"),
             "reaction_species table should exist"
         );
+        for table_name in E04_T03_TABLES {
+            assert!(
+                table_exists(&database_path, table_name),
+                "expected E04-T03 table `{table_name}` to exist"
+            );
+        }
+        for index_name in E04_T03_INDEXES {
+            assert!(
+                index_exists(&database_path, index_name),
+                "expected E04-T03 index `{index_name}` to exist"
+            );
+        }
 
         let second_run = run_migrations(&database_path).expect("rerun should be safe");
         assert!(
             second_run.applied_versions.is_empty(),
             "no migration should re-apply"
         );
+    }
+
+    #[test]
+    fn upgrades_existing_database_with_pending_e04_t03_migration() {
+        let temp_dir = TempDir::new().expect("must create temporary directory");
+        let database_path = temp_dir.path().join("existing.sqlite3");
+
+        let pre_e04_t03_plan = [
+            Migration {
+                version: 1,
+                name: "0001_init_storage_metadata",
+                sql: MIGRATION_0001_INIT_STORAGE_SQL,
+            },
+            Migration {
+                version: 2,
+                name: "0002_create_core_chemical_data",
+                sql: MIGRATION_0002_CORE_CHEMICAL_DATA_SQL,
+            },
+        ];
+        let initial_run = run_migrations_with(&database_path, &pre_e04_t03_plan)
+            .expect("baseline pre-E04-T03 migrations should succeed");
+        assert_eq!(initial_run.applied_versions, vec![1, 2]);
+        assert!(
+            !table_exists(&database_path, "scenario_run"),
+            "pre-E04-T03 database should not contain scenario tables"
+        );
+
+        let upgrade_run =
+            run_migrations(&database_path).expect("upgrade should apply pending version");
+        assert_eq!(upgrade_run.applied_versions, vec![3]);
+        assert_eq!(read_applied_versions(&database_path), vec![1, 2, 3]);
+        for table_name in E04_T03_TABLES {
+            assert!(
+                table_exists(&database_path, table_name),
+                "expected E04-T03 table `{table_name}` to exist after upgrade"
+            );
+        }
+        for index_name in E04_T03_INDEXES {
+            assert!(
+                index_exists(&database_path, index_name),
+                "expected E04-T03 index `{index_name}` to exist after upgrade"
+            );
+        }
     }
 
     #[test]
@@ -699,6 +858,17 @@ THIS IS NOT VALID SQL;
         let count: i64 = statement
             .query_row([table_name], |row| row.get(0))
             .expect("must query table lookup");
+        count == 1
+    }
+
+    fn index_exists(database_path: &Path, index_name: &str) -> bool {
+        let connection = Connection::open(database_path).expect("must open test database");
+        let mut statement = connection
+            .prepare("SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = ?1")
+            .expect("must prepare index lookup");
+        let count: i64 = statement
+            .query_row([index_name], |row| row.get(0))
+            .expect("must query index lookup");
         count == 1
     }
 
