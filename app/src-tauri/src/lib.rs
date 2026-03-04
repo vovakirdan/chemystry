@@ -1,3 +1,8 @@
+pub mod infra {
+    pub mod errors;
+    pub mod logging;
+}
+
 #[path = "adapters/ipc/v1.rs"]
 mod ipc_v1;
 
@@ -8,7 +13,13 @@ fn greet(name: &str) -> String {
         name: name.to_string(),
     }) {
         Ok(output) => output.message,
-        Err(error) => format!("[{}:{}] {}", error.category, error.code, error.message),
+        Err(error) => format!(
+            "[{}:{}] {} (request_id={})",
+            error.category.as_str(),
+            error.code,
+            error.message,
+            error.request_id
+        ),
     }
 }
 

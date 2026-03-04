@@ -1,7 +1,17 @@
 import { useEffect, useState } from "react";
 import reactLogo from "./assets/react.svg";
-import { greetV1, healthV1 } from "./shared/contracts/ipc/client";
+import {
+  greetV1,
+  healthV1,
+  isCommandErrorV1,
+  toUserFacingMessageV1,
+} from "./shared/contracts/ipc/client";
+import type { CommandErrorV1 } from "./shared/contracts/ipc/v1";
 import "./App.css";
+
+function formatCommandError(error: CommandErrorV1): string {
+  return `${toUserFacingMessageV1(error)} [${error.code}] (ref: ${error.requestId})`;
+}
 
 function App() {
   const [greetMsg, setGreetMsg] = useState("");
@@ -14,19 +24,13 @@ function App() {
     healthV1()
       .then((result) => {
         if (!disposed) {
-          setHealthMsg(`Backend ${result.status} (${result.version})`);
+          setHealthMsg(`Backend ${result.status} (${result.version}, ref: ${result.requestId})`);
         }
       })
       .catch((error: unknown) => {
         if (!disposed) {
-          if (
-            typeof error === "object" &&
-            error !== null &&
-            "code" in error &&
-            "message" in error
-          ) {
-            const commandError = error as { code: string; message: string };
-            setHealthMsg(`Backend error [${commandError.code}] ${commandError.message}`);
+          if (isCommandErrorV1(error)) {
+            setHealthMsg(`Backend error: ${formatCommandError(error)}`);
             return;
           }
 
@@ -42,11 +46,10 @@ function App() {
   async function greet() {
     try {
       const result = await greetV1({ name });
-      setGreetMsg(result.message);
+      setGreetMsg(`${result.message} (ref: ${result.requestId})`);
     } catch (error: unknown) {
-      if (typeof error === "object" && error !== null && "code" in error && "message" in error) {
-        const commandError = error as { code: string; message: string };
-        setGreetMsg(`[${commandError.code}] ${commandError.message}`);
+      if (isCommandErrorV1(error)) {
+        setGreetMsg(formatCommandError(error));
         return;
       }
 

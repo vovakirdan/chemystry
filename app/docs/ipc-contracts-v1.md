@@ -1,4 +1,4 @@
-# IPC Contracts v1 (E02-T02)
+# IPC Contracts v1 (E02-T03)
 
 This document defines the baseline versioned IPC contracts shared by frontend and Tauri backend.
 
@@ -6,6 +6,7 @@ This document defines the baseline versioned IPC contracts shared by frontend an
 
 - Command names include a version suffix, for example: `greet_v1`.
 - Payloads include a `version` field with value `"v1"` in all success and error outputs.
+- Payloads include a `requestId` field for end-to-end command tracing.
 - New breaking contract changes must be introduced as `*_v2` commands (keeping `v1` available while migrating).
 
 ## Shared DTO Catalog (v1)
@@ -23,6 +24,7 @@ This document defines the baseline versioned IPC contracts shared by frontend an
 ```json
 {
   "version": "v1",
+  "requestId": "string",
   "message": "string"
 }
 ```
@@ -32,6 +34,7 @@ This document defines the baseline versioned IPC contracts shared by frontend an
 ```json
 {
   "version": "v1",
+  "requestId": "string",
   "status": "ok"
 }
 ```
@@ -41,7 +44,8 @@ This document defines the baseline versioned IPC contracts shared by frontend an
 ```json
 {
   "version": "v1",
-  "category": "validation | internal",
+  "requestId": "string",
+  "category": "validation | io | simulation | import | internal",
   "code": "string",
   "message": "string"
 }
@@ -61,3 +65,9 @@ This document defines the baseline versioned IPC contracts shared by frontend an
   - `category: "validation"`
   - `code`: machine-readable (`NAME_REQUIRED`, `NAME_TOO_LONG`)
   - `message`: human-readable detail
+  - `requestId`: correlation id matching backend logs
+
+## Tracing and Error Mapping
+
+- Backend emits lightweight logs for each command start/success/failure with `request_id`.
+- Frontend maps backend error categories/codes to user-facing messages and includes `requestId` for support correlation.
