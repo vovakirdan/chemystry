@@ -70,6 +70,7 @@ import {
   type AppNotification,
   type NotificationLevel,
 } from "./shared/lib/notifications";
+import { parseNormalizedNumberInput } from "./shared/lib/units";
 import "./App.css";
 
 const FEATURE_LABEL_BY_KEY: Record<FeatureFlagKey, string> = {
@@ -306,8 +307,8 @@ function collectBuilderValidationErrors(
       continue;
     }
 
-    const parsedCoeff = Number(normalizedCoeff);
-    if (Number.isFinite(parsedCoeff) && parsedCoeff <= 0) {
+    const parsedCoeff = parseNormalizedNumberInput(normalizedCoeff, { allowNegative: true });
+    if (parsedCoeff.ok && parsedCoeff.value <= 0) {
       errors.add(`${participantLabel}: reaction coefficient must be greater than 0.`);
     }
 

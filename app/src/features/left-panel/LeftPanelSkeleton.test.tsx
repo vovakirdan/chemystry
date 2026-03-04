@@ -425,7 +425,14 @@ describe("LeftPanelSkeleton presets and builder tabs", () => {
               reactionClass: "inorganic",
               equation: "2H2 + O2 -> 2H2O",
               description: "Builder draft",
-              participants: [createBuilderParticipant()],
+              participants: [
+                createBuilderParticipant(),
+                createBuilderParticipant({
+                  id: "participant-2",
+                  substanceId: "builtin-substance-water",
+                  phase: "liquid",
+                }),
+              ],
             },
             allSubstances: [
               {
@@ -452,6 +459,7 @@ describe("LeftPanelSkeleton presets and builder tabs", () => {
 
     expect(html).toContain('data-testid="builder-participant-list"');
     expect(html).toContain('data-testid="builder-participant-item-participant-1"');
+    expect(html).toContain('data-testid="builder-participant-item-participant-2"');
     expect(html).toContain('data-testid="builder-participant-role-participant-1"');
     expect(html).toContain('data-testid="builder-participant-phase-participant-1"');
     expect(html).toContain('data-testid="builder-participant-coeff-participant-1"');
@@ -460,10 +468,13 @@ describe("LeftPanelSkeleton presets and builder tabs", () => {
     expect(html).toContain('data-testid="builder-participant-volume-participant-1"');
     expect(html).toContain('data-testid="builder-participant-substance-participant-1"');
     expect(html).toContain('data-testid="builder-participant-remove-participant-1"');
+    expect(html).toContain('data-testid="builder-participant-volume-warning-participant-2"');
+    expect(html).toContain("Volume auto-conversion requires gas phase.");
     expect(html).toContain('data-testid="builder-participant-conversion-hint"');
     expect(html).toContain("Amount (mol)");
     expect(html).toContain("Mass (g)");
     expect(html).toContain("Volume (L)");
+    expect(html).toContain("auto-converts only for gas phase.");
     expect(html).toContain('data-testid="builder-participant-add-substance-select"');
     expect(html).toContain('data-testid="builder-participant-add-submit"');
     expect(html).toContain('data-testid="builder-save-draft-button"');

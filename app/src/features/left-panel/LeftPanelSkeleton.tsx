@@ -735,7 +735,8 @@ function renderBuilderView(
               className="left-panel-builder-participant-hint"
               data-testid="builder-participant-conversion-hint"
             >
-              Amount (mol) and Mass (g) auto-convert using selected substance molar mass.
+              Amount (mol) and Mass (g) auto-convert using selected substance molar mass. Volume (L)
+              auto-converts only for gas phase.
             </p>
             {builderViewModel.draft.participants.length === 0 ? (
               <p className="left-panel-placeholder-text" data-testid="builder-participant-empty">
@@ -866,6 +867,15 @@ function renderBuilderView(
                           data-testid={`builder-participant-volume-${participant.id}`}
                         />
                       </label>
+                      {participant.phase !== "gas" && (
+                        <p
+                          className="left-panel-builder-participant-warning"
+                          data-testid={`builder-participant-volume-warning-${participant.id}`}
+                        >
+                          Volume auto-conversion requires gas phase. Enter amount and mass manually
+                          for this participant.
+                        </p>
+                      )}
 
                       <label>
                         Substance

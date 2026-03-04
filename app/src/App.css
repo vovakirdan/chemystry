@@ -772,6 +772,13 @@ button.left-panel-library-delete-button:hover {
   font-size: var(--font-size-xs);
 }
 
+.left-panel-builder-participant-warning {
+  margin: 0;
+  color: #6d4c00;
+  font-size: var(--font-size-xs);
+  grid-column: 1 / -1;
+}
+
 .left-panel-builder-participant-list {
   list-style: none;
   margin: 0;

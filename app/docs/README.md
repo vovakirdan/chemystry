@@ -16,6 +16,7 @@
 - Pre-run validation and launch gate (E06-T03): `manual-reaction-builder-e06-t03.md`
 - Scenario save/load and baseline snapshot (E06-T04): `manual-reaction-builder-e06-t04.md`
 - Simulation lifecycle start/pause/reset (E06-T05): `manual-reaction-builder-e06-t05.md`
+- Units and conversion module (E07-T01): `units-conversions-e07-t01.md`
 - Schema dump (E04-T02): `schema-dump-e04-t02.sql`
 - Schema dump (E04-T03): `schema-dump-e04-t03.sql`
 - Storage JSON fields (E04-T03): `storage-json-fields-e04-t03.md`

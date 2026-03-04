@@ -180,6 +180,24 @@ describe("left panel library model", () => {
     });
   });
 
+  it("supports comma decimal and exponent molar mass input normalization", () => {
+    const validDraftResult = validateUserSubstanceDraft({
+      ...DEFAULT_USER_SUBSTANCE_DRAFT,
+      name: "Ethanol",
+      formula: "C2H6O",
+      phase: "liquid",
+      molarMassInput: " 4,606844e1 ",
+    });
+
+    expect(validDraftResult.errors).toEqual([]);
+    expect(validDraftResult.input).toEqual({
+      name: "Ethanol",
+      formula: "C2H6O",
+      phase: "liquid",
+      molarMassGMol: 46.06844,
+    });
+  });
+
   it("marks builtin/imported as read-only and user entries as editable", () => {
     expect(isUserSubstanceEditable(SAMPLE_SUBSTANCES[0])).toBe(false);
     expect(isUserSubstanceEditable(SAMPLE_SUBSTANCES[2])).toBe(true);
@@ -287,7 +305,7 @@ describe("left panel library model", () => {
     expect(draftAfterRemoval.participants).toEqual([]);
   });
 
-  it("applies mass<->mol conversion using selected substance molar mass", () => {
+  it("applies mass<->mol<->volume conversion for gas participants", () => {
     const baseDraft = addBuilderDraftParticipant(
       createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
       createParticipant("participant-2"),
@@ -303,6 +321,7 @@ describe("left panel library model", () => {
     expect(amountUpdated.participants[0]).toMatchObject({
       amountMolInput: "2",
       massGInput: "4.03176",
+      volumeLInput: "44.8",
     });
 
     const massUpdated = updateBuilderDraftParticipantField(
@@ -315,6 +334,7 @@ describe("left panel library model", () => {
     expect(massUpdated.participants[0]).toMatchObject({
       amountMolInput: "5",
       massGInput: "10.0794",
+      volumeLInput: "112",
     });
 
     const invalidAmount = updateBuilderDraftParticipantField(
@@ -327,6 +347,56 @@ describe("left panel library model", () => {
     expect(invalidAmount.participants[0]).toMatchObject({
       amountMolInput: "-1",
       massGInput: "10.0794",
+      volumeLInput: "112",
+    });
+  });
+
+  it("applies volume->amount->mass for gas and blocks implicit volume conversion for non-gas", () => {
+    const gasDraft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      createParticipant("participant-2-volume", {
+        amountMolInput: "",
+        massGInput: "",
+        volumeLInput: "",
+      }),
+    );
+
+    const gasVolumeUpdated = updateBuilderDraftParticipantField(
+      gasDraft,
+      "participant-2-volume",
+      "volumeLInput",
+      "1,12e2",
+      SAMPLE_SUBSTANCES,
+    );
+    expect(gasVolumeUpdated.participants[0]).toMatchObject({
+      volumeLInput: "1,12e2",
+      amountMolInput: "5",
+      massGInput: "10.0794",
+    });
+
+    const liquidDraft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      createParticipant("participant-liquid-volume", {
+        substanceId: "builtin-substance-water",
+        phase: "liquid",
+        amountMolInput: "1",
+        massGInput: "18.01528",
+        volumeLInput: "",
+      }),
+    );
+
+    const liquidVolumeUpdated = updateBuilderDraftParticipantField(
+      liquidDraft,
+      "participant-liquid-volume",
+      "volumeLInput",
+      "22.4",
+      SAMPLE_SUBSTANCES,
+    );
+    expect(liquidVolumeUpdated.participants[0]).toMatchObject({
+      phase: "liquid",
+      amountMolInput: "1",
+      massGInput: "18.01528",
+      volumeLInput: "22.4",
     });
   });
 
@@ -477,6 +547,22 @@ describe("left panel library model", () => {
     expect(errors).toContain(
       'Volume (L) for participant "participant-negative" cannot be negative.',
     );
+  });
+
+  it("accepts comma decimal and exponent participant numeric inputs during launch validation", () => {
+    const participant = createParticipant("participant-normalized", {
+      phase: "gas" as SubstancePhaseV1,
+      stoichCoeffInput: "1e1",
+      amountMolInput: "1,5",
+      massGInput: "3e0",
+      volumeLInput: "2,5e1",
+    });
+    const draft = addBuilderDraftParticipant(
+      createBuilderDraftFromPreset(SAMPLE_PRESETS[0]),
+      participant,
+    );
+
+    expect(validateBuilderDraftForLaunch(draft)).toEqual([]);
   });
 
   it("resolves selected preset id and formats metadata labels", () => {

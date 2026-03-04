@@ -108,6 +108,47 @@ describe("App pre-run validation", () => {
     ).toBe(false);
   });
 
+  it("blocks launch for non-positive stoich coeff entered with comma decimal format", () => {
+    const validation = buildLaunchValidationModel(
+      createBuilderDraftWithRawId({
+        participants: [
+          {
+            id: "participant-comma",
+            substanceId: "builtin-substance-hydrogen",
+            role: "reactant",
+            stoichCoeffInput: "0,0",
+            phase: "gas",
+            amountMolInput: "1",
+            massGInput: "2.01588",
+            volumeLInput: "22.4",
+          },
+          {
+            id: "participant-comma-2",
+            substanceId: "builtin-substance-hydrogen",
+            role: "product",
+            stoichCoeffInput: "1",
+            phase: "gas",
+            amountMolInput: "1",
+            massGInput: "2.01588",
+            volumeLInput: "22.4",
+          },
+        ],
+      }),
+      VALID_RUNTIME_SETTINGS,
+      SAMPLE_SUBSTANCES,
+    );
+
+    const builderErrors =
+      validation.sections.find((section) => section.id === "builder")?.errors ?? [];
+
+    expect(validation.hasErrors).toBe(true);
+    expect(
+      builderErrors.some((message) =>
+        message.includes("reaction coefficient must be greater than 0."),
+      ),
+    ).toBe(true);
+  });
+
   it("opens launch gate after fixing runtime and builder errors", () => {
     const invalidValidation = buildLaunchValidationModel(
       createBuilderDraftWithRawId(),

@@ -5,6 +5,7 @@ import type {
   SubstancePhaseV1,
   SubstanceSourceV1,
 } from "../../shared/contracts/ipc/v1";
+import { convertQuantityInput, parseNormalizedNumberInput } from "../../shared/lib/units";
 
 export const LEFT_PANEL_TAB_IDS = ["library", "builder", "presets"] as const;
 
@@ -245,7 +246,7 @@ export function updateBuilderDraftParticipantField(
         substanceId: value,
         phase: selectedSubstance?.phase ?? participant.phase,
       };
-      nextParticipant = applyMassMolConversion(nextParticipant, "substanceId", substances);
+      nextParticipant = applyParticipantUnitConversions(nextParticipant, "substanceId", substances);
       updated = true;
       return nextParticipant;
     }
@@ -275,7 +276,11 @@ export function updateBuilderDraftParticipantField(
         ...participant,
         amountMolInput: value,
       };
-      nextParticipant = applyMassMolConversion(nextParticipant, "amountMolInput", substances);
+      nextParticipant = applyParticipantUnitConversions(
+        nextParticipant,
+        "amountMolInput",
+        substances,
+      );
       updated = true;
       return nextParticipant;
     }
@@ -285,16 +290,18 @@ export function updateBuilderDraftParticipantField(
         ...participant,
         massGInput: value,
       };
-      nextParticipant = applyMassMolConversion(nextParticipant, "massGInput", substances);
+      nextParticipant = applyParticipantUnitConversions(nextParticipant, "massGInput", substances);
       updated = true;
       return nextParticipant;
     }
 
-    updated = true;
-    return {
+    nextParticipant = {
       ...participant,
       volumeLInput: value,
     };
+    nextParticipant = applyParticipantUnitConversions(nextParticipant, "volumeLInput", substances);
+    updated = true;
+    return nextParticipant;
   });
 
   if (!updated) {
@@ -401,11 +408,11 @@ export function validateUserSubstanceDraft(
   if (molarMassText.length === 0) {
     errors.push("Molar mass is required.");
   } else {
-    const parsedMolarMass = Number(molarMassText);
-    if (!Number.isFinite(parsedMolarMass) || parsedMolarMass <= 0) {
+    const parsedMolarMass = parseNormalizedNumberInput(molarMassText);
+    if (!parsedMolarMass.ok || parsedMolarMass.value <= 0) {
       errors.push("Molar mass must be a positive number.");
     } else {
-      molarMassGMol = parsedMolarMass;
+      molarMassGMol = parsedMolarMass.value;
     }
   }
 
@@ -548,22 +555,27 @@ function isOptionalInputString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
 }
 
+const PARTICIPANT_INPUT_FIELD_UNITS = {
+  amountMolInput: "mol",
+  massGInput: "g",
+  volumeLInput: "L",
+} as const;
+
+type ParticipantConvertibleInputField = keyof typeof PARTICIPANT_INPUT_FIELD_UNITS;
+
+const PARTICIPANT_CONVERSION_SOURCE_PRIORITY: ReadonlyArray<ParticipantConvertibleInputField> = [
+  "amountMolInput",
+  "massGInput",
+  "volumeLInput",
+];
+
 function parseNonNegativeInputNumber(value: string): number | null {
-  const normalizedValue = value.trim();
-  if (normalizedValue.length === 0) {
+  const parsedValue = parseNormalizedNumberInput(value);
+  if (!parsedValue.ok) {
     return null;
   }
 
-  const parsedValue = Number(normalizedValue);
-  if (!Number.isFinite(parsedValue) || parsedValue < 0) {
-    return null;
-  }
-
-  return parsedValue;
-}
-
-function formatConvertedQuantity(value: number): string {
-  return String(Number(value.toFixed(8)));
+  return parsedValue.value;
 }
 
 function resolveParticipantMolarMassGMol(
@@ -576,44 +588,101 @@ function resolveParticipantMolarMassGMol(
     return null;
   }
 
-  if (selectedSubstance.molarMassGMol <= 0) {
+  if (!Number.isFinite(selectedSubstance.molarMassGMol) || selectedSubstance.molarMassGMol <= 0) {
     return null;
   }
 
   return selectedSubstance.molarMassGMol;
 }
 
-function applyMassMolConversion(
+function resolveParticipantConversionContext(
   participant: BuilderDraftParticipant,
-  sourceField: "substanceId" | "amountMolInput" | "massGInput",
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): { molarMassGMol?: number; isGasPhase: boolean } {
+  const context: {
+    molarMassGMol?: number;
+    isGasPhase: boolean;
+  } = {
+    isGasPhase: participant.phase === "gas",
+  };
+
+  const molarMassGMol = resolveParticipantMolarMassGMol(participant, substances);
+  if (molarMassGMol !== null) {
+    context.molarMassGMol = molarMassGMol;
+  }
+
+  return context;
+}
+
+function applyParticipantUnitConversionsFromSourceField(
+  participant: BuilderDraftParticipant,
+  sourceField: ParticipantConvertibleInputField,
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>,
+): BuilderDraftParticipant | null {
+  const conversionContext = resolveParticipantConversionContext(participant, substances);
+  const sourceValueInput = participant[sourceField];
+  const sourceUnit = PARTICIPANT_INPUT_FIELD_UNITS[sourceField];
+
+  let convertedParticipant = participant;
+  let hasAnyConversion = false;
+
+  for (const targetField of PARTICIPANT_CONVERSION_SOURCE_PRIORITY) {
+    if (targetField === sourceField) {
+      continue;
+    }
+
+    const targetUnit = PARTICIPANT_INPUT_FIELD_UNITS[targetField];
+    const conversionResult = convertQuantityInput({
+      valueInput: sourceValueInput,
+      fromUnit: sourceUnit,
+      toUnit: targetUnit,
+      context: conversionContext,
+    });
+
+    if (!conversionResult.ok) {
+      continue;
+    }
+
+    convertedParticipant = {
+      ...convertedParticipant,
+      [targetField]: conversionResult.formattedValue,
+    };
+    hasAnyConversion = true;
+  }
+
+  return hasAnyConversion ? convertedParticipant : null;
+}
+
+function applyParticipantUnitConversions(
+  participant: BuilderDraftParticipant,
+  sourceField: "substanceId" | ParticipantConvertibleInputField,
   substances: ReadonlyArray<SubstanceCatalogEntryV1>,
 ): BuilderDraftParticipant {
-  const molarMassGMol = resolveParticipantMolarMassGMol(participant, substances);
-  if (molarMassGMol === null) {
+  if (sourceField === "substanceId") {
+    for (const candidateSourceField of PARTICIPANT_CONVERSION_SOURCE_PRIORITY) {
+      if (parseNonNegativeInputNumber(participant[candidateSourceField]) === null) {
+        continue;
+      }
+
+      const convertedFromCandidate = applyParticipantUnitConversionsFromSourceField(
+        participant,
+        candidateSourceField,
+        substances,
+      );
+      if (convertedFromCandidate !== null) {
+        return convertedFromCandidate;
+      }
+    }
+
     return participant;
   }
 
-  if (sourceField === "amountMolInput" || sourceField === "substanceId") {
-    const amountMol = parseNonNegativeInputNumber(participant.amountMolInput);
-    if (amountMol !== null) {
-      return {
-        ...participant,
-        massGInput: formatConvertedQuantity(amountMol * molarMassGMol),
-      };
-    }
-  }
-
-  if (sourceField === "massGInput" || sourceField === "substanceId") {
-    const massG = parseNonNegativeInputNumber(participant.massGInput);
-    if (massG !== null) {
-      return {
-        ...participant,
-        amountMolInput: formatConvertedQuantity(massG / molarMassGMol),
-      };
-    }
-  }
-
-  return participant;
+  const convertedParticipant = applyParticipantUnitConversionsFromSourceField(
+    participant,
+    sourceField,
+    substances,
+  );
+  return convertedParticipant ?? participant;
 }
 
 function pushBuilderParticipantNonNegativeFieldError(
@@ -627,14 +696,15 @@ function pushBuilderParticipantNonNegativeFieldError(
     return;
   }
 
-  const parsedValue = Number(normalizedValue);
-  if (!Number.isFinite(parsedValue)) {
+  const parsedValue = parseNormalizedNumberInput(normalizedValue);
+  if (!parsedValue.ok) {
+    if (parsedValue.code === "NEGATIVE_VALUE") {
+      errors.push(`${fieldLabel} for participant "${participantId}" cannot be negative.`);
+      return;
+    }
+
     errors.push(`${fieldLabel} for participant "${participantId}" must be a number.`);
     return;
-  }
-
-  if (parsedValue < 0) {
-    errors.push(`${fieldLabel} for participant "${participantId}" cannot be negative.`);
   }
 }
 
