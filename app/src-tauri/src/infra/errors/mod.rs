@@ -55,7 +55,13 @@ impl CommandError {
         code: &'static str,
         message: impl Into<String>,
     ) -> Self {
-        Self::new(version, request_id, ErrorCategory::Validation, code, message)
+        Self::new(
+            version,
+            request_id,
+            ErrorCategory::Validation,
+            code,
+            message,
+        )
     }
 
     pub fn io(
@@ -73,7 +79,13 @@ impl CommandError {
         code: &'static str,
         message: impl Into<String>,
     ) -> Self {
-        Self::new(version, request_id, ErrorCategory::Simulation, code, message)
+        Self::new(
+            version,
+            request_id,
+            ErrorCategory::Simulation,
+            code,
+            message,
+        )
     }
 
     pub fn import(

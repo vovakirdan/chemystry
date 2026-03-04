@@ -1,17 +1,30 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 type CenterPanelSkeletonProps = {
   children?: ReactNode;
+  onSimulationControlsChange?: (state: CenterPanelControlState) => void;
 };
 
 const TIMELINE_MIN = 0;
 const TIMELINE_MAX = 100;
 const TIMELINE_STEP = 1;
-const TIMELINE_INITIAL = 25;
+export const CENTER_TIMELINE_INITIAL = 25;
 
-function CenterPanelSkeleton({ children }: CenterPanelSkeletonProps) {
+export type CenterPanelControlState = {
+  isPlaying: boolean;
+  timelinePosition: number;
+};
+
+function CenterPanelSkeleton({ children, onSimulationControlsChange }: CenterPanelSkeletonProps) {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [timelinePosition, setTimelinePosition] = useState(TIMELINE_INITIAL);
+  const [timelinePosition, setTimelinePosition] = useState(CENTER_TIMELINE_INITIAL);
+
+  useEffect(() => {
+    onSimulationControlsChange?.({
+      isPlaying,
+      timelinePosition,
+    });
+  }, [isPlaying, onSimulationControlsChange, timelinePosition]);
 
   function resetControls(): void {
     setIsPlaying(false);

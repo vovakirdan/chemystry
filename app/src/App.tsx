@@ -1,7 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import AppShell from "./app/layout/AppShell";
 import reactLogo from "./assets/react.svg";
-import CenterPanelSkeleton from "./features/center-panel/CenterPanelSkeleton";
+import CenterPanelSkeleton, {
+  CENTER_TIMELINE_INITIAL,
+  type CenterPanelControlState,
+} from "./features/center-panel/CenterPanelSkeleton";
 import LeftPanelSkeleton from "./features/left-panel/LeftPanelSkeleton";
 import {
   DEFAULT_LEFT_PANEL_TAB,
@@ -11,7 +14,10 @@ import {
 } from "./features/left-panel/model";
 import RightPanelSkeleton, {
   type RightPanelFeatureStatus,
+  type RightPanelRuntimeSettings,
 } from "./features/right-panel/RightPanelSkeleton";
+import NotificationCenter from "./shared/components/NotificationCenter";
+import StatusBar from "./shared/components/StatusBar";
 import type { FeatureFlagKey, FeatureFlags } from "./shared/config/featureFlags";
 import { DEFAULT_FEATURE_FLAGS } from "./shared/config/featureFlags";
 import {
@@ -23,6 +29,11 @@ import {
   toUserFacingMessageV1,
 } from "./shared/contracts/ipc/client";
 import type { CommandErrorV1 } from "./shared/contracts/ipc/v1";
+import {
+  appendNotification,
+  type AppNotification,
+  type NotificationLevel,
+} from "./shared/lib/notifications";
 import "./App.css";
 
 const FEATURE_LABEL_BY_KEY: Record<FeatureFlagKey, string> = {
@@ -51,6 +62,16 @@ const LEFT_PANEL_PLACEHOLDER_STATE_BY_TAB: Readonly<
   library: "loading",
   builder: "empty",
   presets: "error",
+};
+
+const DEFAULT_CENTER_PANEL_STATE: Readonly<CenterPanelControlState> = {
+  isPlaying: false,
+  timelinePosition: CENTER_TIMELINE_INITIAL,
+};
+
+const DEFAULT_RUNTIME_SETTINGS: Readonly<RightPanelRuntimeSettings> = {
+  precisionProfile: "Balanced",
+  fpsLimit: 60,
 };
 
 function readStoredLeftPanelTab(): LeftPanelTabId {
@@ -87,6 +108,22 @@ function formatCommandError(error: CommandErrorV1): string {
   return `${toUserFacingMessageV1(error)} [${error.code}] (ref: ${error.requestId})`;
 }
 
+function resolveSimulationState(state: CenterPanelControlState): string {
+  if (state.isPlaying) {
+    return "Running";
+  }
+
+  if (state.timelinePosition <= 0) {
+    return "Reset";
+  }
+
+  if (state.timelinePosition >= 100) {
+    return "Completed";
+  }
+
+  return "Paused";
+}
+
 function App() {
   const [activeLeftPanelTab, setActiveLeftPanelTab] =
     useState<LeftPanelTabId>(readStoredLeftPanelTab);
@@ -96,6 +133,32 @@ function App() {
   const [featureFlags, setFeatureFlags] = useState<Readonly<FeatureFlags>>(DEFAULT_FEATURE_FLAGS);
   const [featureFlagsMsg, setFeatureFlagsMsg] = useState("Loading feature flags...");
   const [featurePathMsg, setFeaturePathMsg] = useState("");
+  const [simulationControlState, setSimulationControlState] = useState<CenterPanelControlState>(
+    DEFAULT_CENTER_PANEL_STATE,
+  );
+  const [runtimeSettings, setRuntimeSettings] =
+    useState<RightPanelRuntimeSettings>(DEFAULT_RUNTIME_SETTINGS);
+  const [notifications, setNotifications] = useState<ReadonlyArray<AppNotification>>([]);
+  const notificationIdRef = useRef(0);
+  const previousSimulationStateRef = useRef<string | null>(null);
+  const previousRuntimeSettingsRef = useRef<RightPanelRuntimeSettings | null>(null);
+
+  const enqueueNotification = useCallback((level: NotificationLevel, message: string): void => {
+    notificationIdRef.current += 1;
+    const nextNotification: AppNotification = {
+      id: notificationIdRef.current,
+      level,
+      message,
+    };
+
+    setNotifications((queue) => appendNotification(queue, nextNotification));
+  }, []);
+
+  const dismissNotification = useCallback((id: number): void => {
+    setNotifications((queue) => queue.filter((notification) => notification.id !== id));
+  }, []);
+
+  const simulationStateLabel = resolveSimulationState(simulationControlState);
 
   useEffect(() => {
     persistLeftPanelTab(activeLeftPanelTab);
@@ -108,16 +171,21 @@ function App() {
       .then((result) => {
         if (!disposed) {
           setHealthMsg(`Backend ${result.status} (${result.version}, ref: ${result.requestId})`);
+          enqueueNotification("info", `Backend status: ${result.status}.`);
         }
       })
       .catch((error: unknown) => {
         if (!disposed) {
           if (isCommandErrorV1(error)) {
-            setHealthMsg(`Backend error: ${formatCommandError(error)}`);
+            const message = `Backend error: ${formatCommandError(error)}`;
+            setHealthMsg(message);
+            enqueueNotification("error", message);
             return;
           }
 
-          setHealthMsg(`Backend error ${String(error)}`);
+          const message = `Backend error: ${String(error)}`;
+          setHealthMsg(message);
+          enqueueNotification("error", message);
         }
       });
 
@@ -133,6 +201,9 @@ function App() {
             ? `Feature flags: ${result.source} (ref: ${result.requestId}) - ${result.warning}`
             : `Feature flags: ${result.source} (ref: ${result.requestId})`,
         );
+        if (result.warning) {
+          enqueueNotification("warn", `Feature flag warning: ${result.warning}`);
+        }
       })
       .catch((error: unknown) => {
         if (disposed) {
@@ -140,43 +211,98 @@ function App() {
         }
 
         if (isCommandErrorV1(error)) {
-          setFeatureFlagsMsg(`Feature flag error: ${formatCommandError(error)}`);
+          const message = `Feature flag error: ${formatCommandError(error)}`;
+          setFeatureFlagsMsg(message);
+          enqueueNotification("error", message);
           return;
         }
 
-        setFeatureFlagsMsg(`Feature flag error: ${String(error)}`);
+        const message = `Feature flag error: ${String(error)}`;
+        setFeatureFlagsMsg(message);
+        enqueueNotification("error", message);
       });
 
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [enqueueNotification]);
+
+  useEffect(() => {
+    const previousSimulationState = previousSimulationStateRef.current;
+
+    if (previousSimulationState === null) {
+      previousSimulationStateRef.current = simulationStateLabel;
+      return;
+    }
+
+    if (previousSimulationState !== simulationStateLabel) {
+      enqueueNotification("info", `Simulation state changed: ${simulationStateLabel}.`);
+      previousSimulationStateRef.current = simulationStateLabel;
+    }
+  }, [enqueueNotification, simulationStateLabel]);
+
+  useEffect(() => {
+    const previousRuntimeSettings = previousRuntimeSettingsRef.current;
+
+    if (previousRuntimeSettings === null) {
+      previousRuntimeSettingsRef.current = runtimeSettings;
+      return;
+    }
+
+    if (previousRuntimeSettings.precisionProfile !== runtimeSettings.precisionProfile) {
+      enqueueNotification("info", `Precision profile set to ${runtimeSettings.precisionProfile}.`);
+    }
+
+    if (previousRuntimeSettings.fpsLimit !== runtimeSettings.fpsLimit) {
+      if (runtimeSettings.fpsLimit > 120) {
+        enqueueNotification(
+          "warn",
+          `FPS limit ${runtimeSettings.fpsLimit} may reduce stability on low-end hardware.`,
+        );
+      } else {
+        enqueueNotification("info", `FPS limit set to ${runtimeSettings.fpsLimit}.`);
+      }
+    }
+
+    previousRuntimeSettingsRef.current = runtimeSettings;
+  }, [enqueueNotification, runtimeSettings]);
 
   async function greet() {
     try {
       const result = await greetV1({ name });
       setGreetMsg(`${result.message} (ref: ${result.requestId})`);
+      enqueueNotification("info", `Greeting completed for "${name || "anonymous"}".`);
     } catch (error: unknown) {
       if (isCommandErrorV1(error)) {
-        setGreetMsg(formatCommandError(error));
+        const message = formatCommandError(error);
+        setGreetMsg(message);
+        enqueueNotification("error", message);
         return;
       }
 
-      setGreetMsg(`Unexpected error: ${String(error)}`);
+      const message = `Unexpected error: ${String(error)}`;
+      setGreetMsg(message);
+      enqueueNotification("error", message);
     }
   }
 
   function triggerFeaturePath(feature: FeatureFlagKey) {
     try {
       ensureFeatureEnabledV1(featureFlags, feature);
-      setFeaturePathMsg(`${FEATURE_LABEL_BY_KEY[feature]} path is available.`);
+      const message = `${FEATURE_LABEL_BY_KEY[feature]} path is available.`;
+      setFeaturePathMsg(message);
+      enqueueNotification("info", message);
     } catch (error: unknown) {
       if (isCommandErrorV1(error)) {
-        setFeaturePathMsg(formatCommandError(error));
+        const message = formatCommandError(error);
+        setFeaturePathMsg(message);
+        enqueueNotification("warn", message);
         return;
       }
 
-      setFeaturePathMsg(`Unexpected error: ${String(error)}`);
+      const message = `Unexpected error: ${String(error)}`;
+      setFeaturePathMsg(message);
+      enqueueNotification("error", message);
     }
   }
 
@@ -192,8 +318,17 @@ function App() {
     }),
   );
 
+  const handleSimulationControlsChange = useCallback((state: CenterPanelControlState): void => {
+    setSimulationControlState(state);
+  }, []);
+
+  const handleRuntimeSettingsChange = useCallback((state: RightPanelRuntimeSettings): void => {
+    setRuntimeSettings(state);
+  }, []);
+
   return (
     <div className="app-root">
+      <NotificationCenter notifications={notifications} onDismiss={dismissNotification} />
       <AppShell
         leftPanel={
           <LeftPanelSkeleton
@@ -203,7 +338,7 @@ function App() {
           />
         }
         centerPanel={
-          <CenterPanelSkeleton>
+          <CenterPanelSkeleton onSimulationControlsChange={handleSimulationControlsChange}>
             <header className="center-header">
               <h1>Welcome to Tauri + React</h1>
               <p>
@@ -276,8 +411,14 @@ function App() {
           <RightPanelSkeleton
             healthMessage={healthMsg}
             featureStatuses={rightPanelFeatureStatuses}
+            onRuntimeSettingsChange={handleRuntimeSettingsChange}
           />
         }
+      />
+      <StatusBar
+        simulationState={simulationStateLabel}
+        precisionProfile={runtimeSettings.precisionProfile}
+        fpsLimit={runtimeSettings.fpsLimit}
       />
     </div>
   );

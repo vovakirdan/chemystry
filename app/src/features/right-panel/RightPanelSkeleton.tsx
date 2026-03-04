@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_RIGHT_PANEL_SECTION, type RightPanelSectionId } from "./model";
 
 export type RightPanelFeatureStatus = {
@@ -10,6 +10,7 @@ export type RightPanelFeatureStatus = {
 type RightPanelSkeletonProps = {
   healthMessage: string;
   featureStatuses: ReadonlyArray<RightPanelFeatureStatus>;
+  onRuntimeSettingsChange?: (state: RightPanelRuntimeSettings) => void;
 };
 
 type RightPanelSectionDefinition = {
@@ -40,13 +41,52 @@ const RIGHT_PANEL_SECTION_DEFINITIONS: ReadonlyArray<RightPanelSectionDefinition
   },
 ];
 
-function RightPanelSkeleton({ healthMessage, featureStatuses }: RightPanelSkeletonProps) {
+const PRECISION_PROFILE_OPTIONS = ["Balanced", "High Precision", "Custom"] as const;
+type PrecisionProfile = (typeof PRECISION_PROFILE_OPTIONS)[number];
+
+const DEFAULT_PRECISION_PROFILE: PrecisionProfile = "Balanced";
+const DEFAULT_FPS_LIMIT = 60;
+
+export type RightPanelRuntimeSettings = {
+  precisionProfile: PrecisionProfile;
+  fpsLimit: number;
+};
+
+function isPrecisionProfile(value: string): value is PrecisionProfile {
+  return PRECISION_PROFILE_OPTIONS.includes(value as PrecisionProfile);
+}
+
+function RightPanelSkeleton({
+  healthMessage,
+  featureStatuses,
+  onRuntimeSettingsChange,
+}: RightPanelSkeletonProps) {
   const [activeSection, setActiveSection] = useState<RightPanelSectionId>(
     DEFAULT_RIGHT_PANEL_SECTION,
   );
   const [ambientFogEnabled, setAmbientFogEnabled] = useState(false);
   const [calculationPasses, setCalculationPasses] = useState("250");
+  const [precisionProfile, setPrecisionProfile] =
+    useState<PrecisionProfile>(DEFAULT_PRECISION_PROFILE);
+  const [fpsLimitInput, setFpsLimitInput] = useState(String(DEFAULT_FPS_LIMIT));
   const [summaryNote, setSummaryNote] = useState("Initial scenario review pending.");
+
+  const normalizedFpsLimit = useMemo(() => {
+    const parsedValue = Number(fpsLimitInput);
+
+    if (!Number.isFinite(parsedValue) || parsedValue < 1) {
+      return DEFAULT_FPS_LIMIT;
+    }
+
+    return Math.round(parsedValue);
+  }, [fpsLimitInput]);
+
+  useEffect(() => {
+    onRuntimeSettingsChange?.({
+      precisionProfile,
+      fpsLimit: normalizedFpsLimit,
+    });
+  }, [normalizedFpsLimit, onRuntimeSettingsChange, precisionProfile]);
 
   return (
     <div className="right-panel-skeleton" data-testid="right-panel-skeleton">
@@ -143,6 +183,45 @@ function RightPanelSkeleton({ healthMessage, featureStatuses }: RightPanelSkelet
                 />
                 <p className="status-line" data-testid="right-panel-calculations-value">
                   Planned passes: {calculationPasses}
+                </p>
+
+                <label htmlFor="right-panel-precision-profile-select">Precision profile</label>
+                <select
+                  id="right-panel-precision-profile-select"
+                  aria-label="Simulation precision profile"
+                  data-testid="right-panel-calculations-precision"
+                  value={precisionProfile}
+                  onChange={(event) => {
+                    const nextProfile = event.currentTarget.value;
+
+                    if (isPrecisionProfile(nextProfile)) {
+                      setPrecisionProfile(nextProfile);
+                    }
+                  }}
+                >
+                  {PRECISION_PROFILE_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+                <p className="status-line" data-testid="right-panel-calculations-precision-value">
+                  Precision profile: {precisionProfile}
+                </p>
+
+                <label htmlFor="right-panel-fps-limit-input">FPS limit</label>
+                <input
+                  id="right-panel-fps-limit-input"
+                  type="number"
+                  min={1}
+                  step={1}
+                  aria-label="Simulation FPS limit"
+                  data-testid="right-panel-calculations-fps"
+                  value={fpsLimitInput}
+                  onChange={(event) => setFpsLimitInput(event.currentTarget.value)}
+                />
+                <p className="status-line" data-testid="right-panel-calculations-fps-value">
+                  FPS limit: {normalizedFpsLimit}
                 </p>
               </div>
             ) : null}
