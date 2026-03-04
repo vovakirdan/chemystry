@@ -1,0 +1,118 @@
+# Project Rules (Mandatory)
+
+Статус: **обязательные правила для всех задач в `tasks/`**. 
+Любая задача считается незавершенной, если нарушен хотя бы один пункт ниже.
+
+## 1. Базовый подход
+
+- Источник структуры проекта: использовать `create-tauri-app` (Tauri v2 quickstart) как стартовый шаблон, не собирать структуру вручную до генерации шаблона.
+- Каждый инкремент должен быть небольшим и проверяемым: по задаче должен быть явный результат (код, тесты, документация, конфиг).
+- Все изменения проходят через quality gate (см. раздел 7).
+
+## 2. Форматирование кода
+
+### 2.1 Rust
+
+- Форматирование только через `rustfmt`.
+- Проверка в CI: `cargo fmt --all -- --check`.
+- Ручное форматирование перед коммитом: `cargo fmt --all`.
+
+### 2.2 Frontend (TypeScript/React, JSON/YAML/Markdown)
+
+- Обязателен `Prettier` для единообразного форматирования.
+- Пример проверки: `npm run format:check`.
+- Пример автоисправления: `npm run format`.
+
+### 2.3 Общие правила текстовых файлов
+
+- Обязателен `.editorconfig` (концы строк, отступы, trailing newline).
+- Все файлы в UTF-8.
+
+## 3. Линтеры и статический анализ
+
+### 3.1 Rust
+
+- Обязателен `clippy`.
+- CI-команда: `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
+- Новые предупреждения clippy в изменяемых модулях не допускаются.
+
+### 3.2 Frontend
+
+- Обязателен `ESLint` + `typescript-eslint`.
+- Режим проверки в CI должен падать на error-level нарушениях.
+- Предпочтительно включить type-aware правила для критичных слоев (`domain`, `services`, `state`).
+
+## 4. Тестовая стратегия
+
+## 4.1 Rust
+
+- Unit-тесты рядом с модулем (`#[cfg(test)]`).
+- Integration-тесты в `src-tauri/tests/`.
+- Для детерминированной логики (расчеты/симуляция) тесты обязательны.
+
+## 4.2 Frontend
+
+- Unit/component тесты на `Vitest`.
+- UI-поведение тестировать через Testing Library подход (проверка через пользовательские сценарии, не внутренние имплементации).
+- Именование: `*.test.ts` / `*.test.tsx`.
+
+## 4.3 E2E
+
+- Критические пользовательские потоки покрываются `Playwright`.
+- E2E-спецификации размещать в `tests/e2e`.
+- Минимальный smoke-набор обязателен для релиза MVP.
+
+## 5. Структура файлов
+
+- Базовую структуру создает quickstart Tauri v2.
+- Backend Rust: `src-tauri/`.
+- Frontend: `src/` (или `frontend/src/`, если выбран отдельный workspace, но единообразно по проекту).
+- Рекомендуемые каталоги:
+  - `src/features/*` для UI-фич.
+  - `src/shared/*` для общих компонентов и утилит.
+  - `src-tauri/src/domain/*` для расчетных/симуляционных доменных модулей.
+  - `src-tauri/src/adapters/*` для импорта/экспорта и внешних адаптеров.
+  - `tests/e2e/*` для Playwright.
+  - `docs/adr/*` для архитектурных решений.
+
+## 6. Безопасность и надежность (минимум)
+
+- Tauri capabilities: принцип least privilege.
+- CSP должен быть явным и минимально необходимым.
+- Импорт файлов должен проходить валидацию: формат, размер, таймауты, безопасные пути.
+- IPC-команды принимают только валидные DTO, ошибки нормализованы.
+
+## 7. Quality Gate (обязателен перед merge)
+
+Исполнитель обязан приложить результаты или CI-статус следующих проверок:
+
+1. `cargo fmt --all -- --check`
+2. `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+3. `cargo test --workspace`
+4. `npm run lint`
+5. `npm run test`
+6. `npm run build`
+7. `npx playwright test` (для задач, затрагивающих критические пользовательские флоу)
+
+## 8. Definition of Done для любой задачи
+
+- Выполнен scope задачи.
+- Выполнены acceptance criteria из файла задачи.
+- Не нарушены правила из этого документа.
+- Добавлены/обновлены тесты и документация по измененной области.
+- Изменения интегрируются без регрессий в существующий функционал.
+
+## 9. Sources (Best Practices)
+
+- Tauri v2 Quick Start: https://v2.tauri.app/start/
+- Tauri Security (Capabilities): https://v2.tauri.app/security/capabilities/
+- Tauri Security (CSP): https://v2.tauri.app/security/csp/
+- rustfmt: https://github.com/rust-lang/rustfmt
+- Clippy usage: https://doc.rust-lang.org/stable/clippy/usage.html
+- Rust tests (book): https://doc.rust-lang.org/book/ch11-03-test-organization.html
+- ESLint Getting Started: https://eslint.org/docs/latest/use/getting-started
+- typescript-eslint Quickstart: https://typescript-eslint.io/getting-started/
+- Prettier install/docs: https://prettier.io/docs/install.html
+- Vitest docs: https://vitest.dev/guide/
+- Playwright docs: https://playwright.dev/docs/intro
+- EditorConfig: https://editorconfig.org/
