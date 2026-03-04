@@ -35,3 +35,4 @@ Baseline anchors include:
 | Backend boundary adapters | `src-tauri/src/adapters/` |
 | Backend infrastructure implementations | `src-tauri/src/infra/` |
 | Architecture documentation | `docs/architecture.md` |
+| Architecture decisions (ADR) | `docs/adr/` |
