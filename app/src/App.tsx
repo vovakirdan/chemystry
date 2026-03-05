@@ -35,6 +35,7 @@ import {
   type UserSubstanceDraftField,
 } from "./features/left-panel/model";
 import RightPanelSkeleton, {
+  type EnvironmentDerivedMetrics,
   type RightPanelFeatureStatus,
   type ScenarioHistoryEntry,
   type RightPanelRuntimeSettings,
@@ -634,6 +635,120 @@ function deriveParticleModelEnvironment(
     temperatureK,
     pressureAtm,
     medium: settings.gasMedium,
+  };
+}
+
+function resolveCollisionMediumFactor(medium: ParticleModelEnvironment["medium"]): number {
+  switch (medium) {
+    case "liquid":
+      return 0.82;
+    case "vacuum":
+      return 0.3;
+    case "gas":
+    default:
+      return 1;
+  }
+}
+
+function buildEnvironmentDerivedMetrics(
+  runtimeSettings: RightPanelRuntimeSettings,
+  baselineSnapshot: BuilderRuntimeSnapshot | null,
+): EnvironmentDerivedMetrics {
+  const currentEnvironment = deriveParticleModelEnvironment(runtimeSettings);
+  const currentGasMolarVolumeLPerMol =
+    currentEnvironment.pressureAtm <= 0
+      ? null
+      : (IDEAL_GAS_CONSTANT_L_ATM_PER_MOL_K * currentEnvironment.temperatureK) /
+        currentEnvironment.pressureAtm;
+  const currentCollisionRateIndex =
+    currentEnvironment.pressureAtm *
+    Math.sqrt(Math.max(currentEnvironment.temperatureK, 0.01) / 298.15) *
+    resolveCollisionMediumFactor(currentEnvironment.medium);
+
+  const baselineEnvironment =
+    baselineSnapshot === null
+      ? null
+      : deriveParticleModelEnvironment(baselineSnapshot.runtimeSettings);
+  const baselineGasMolarVolumeLPerMol =
+    baselineEnvironment === null || baselineEnvironment.pressureAtm <= 0
+      ? null
+      : (IDEAL_GAS_CONSTANT_L_ATM_PER_MOL_K * baselineEnvironment.temperatureK) /
+        baselineEnvironment.pressureAtm;
+  const baselineCollisionRateIndex =
+    baselineEnvironment === null
+      ? null
+      : baselineEnvironment.pressureAtm *
+        Math.sqrt(Math.max(baselineEnvironment.temperatureK, 0.01) / 298.15) *
+        resolveCollisionMediumFactor(baselineEnvironment.medium);
+
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  if (runtimeSettings.temperatureC === null) {
+    errors.push("Temperature is missing. Derived metrics may be incomplete.");
+  } else if (
+    runtimeSettings.temperatureC <= MIN_TEMPERATURE_C ||
+    runtimeSettings.temperatureC > MAX_TEMPERATURE_C
+  ) {
+    errors.push(
+      `Temperature is out of supported range (${MIN_TEMPERATURE_C}°C to ${MAX_TEMPERATURE_C}°C).`,
+    );
+  }
+
+  if (runtimeSettings.pressureAtm === null) {
+    errors.push("Pressure is missing. Derived metrics may be incomplete.");
+  } else if (
+    runtimeSettings.pressureAtm < MIN_PRESSURE_ATM ||
+    runtimeSettings.pressureAtm > MAX_PRESSURE_ATM
+  ) {
+    errors.push(
+      `Pressure is out of supported range (${MIN_PRESSURE_ATM} to ${MAX_PRESSURE_ATM} atm).`,
+    );
+  }
+
+  if (runtimeSettings.gasMedium === "vacuum" && runtimeSettings.pressureAtm !== null) {
+    if (runtimeSettings.pressureAtm > 0.2) {
+      warnings.push(
+        "Vacuum medium is selected while pressure is relatively high; results may be inconsistent.",
+      );
+    }
+  }
+
+  if (runtimeSettings.gasMedium === "liquid" && runtimeSettings.pressureAtm !== null) {
+    if (runtimeSettings.pressureAtm < 0.5) {
+      warnings.push(
+        "Liquid aerosol medium with very low pressure can produce unstable approximation metrics.",
+      );
+    }
+  }
+
+  if (currentGasMolarVolumeLPerMol !== null && currentGasMolarVolumeLPerMol > 120) {
+    warnings.push(
+      "Ideal-gas molar volume is very high; validate assumptions for sparse gas regime.",
+    );
+  }
+
+  return {
+    current: {
+      temperatureK: currentEnvironment.temperatureK,
+      pressureAtm: currentEnvironment.pressureAtm,
+      gasMedium: currentEnvironment.medium,
+      gasMolarVolumeLPerMol: currentGasMolarVolumeLPerMol,
+      collisionRateIndex: currentCollisionRateIndex,
+    },
+    baseline:
+      baselineEnvironment === null
+        ? null
+        : {
+            temperatureK: baselineEnvironment.temperatureK,
+            pressureAtm: baselineEnvironment.pressureAtm,
+            gasMedium: baselineEnvironment.medium,
+            gasMolarVolumeLPerMol: baselineGasMolarVolumeLPerMol,
+            collisionRateIndex: baselineCollisionRateIndex,
+          },
+    warnings,
+    errors,
+    updatedAtLabel: new Date().toLocaleTimeString(),
   };
 }
 
@@ -1944,6 +2059,10 @@ function App({ initialBuilderDraft = null }: AppProps) {
     () => deriveParticleModelEnvironment(runtimeSettings),
     [runtimeSettings],
   );
+  const environmentDerivedMetrics = useMemo(
+    () => buildEnvironmentDerivedMetrics(runtimeSettings, baselineSnapshot),
+    [baselineSnapshot, runtimeSettings],
+  );
   const calculationInputSignature = useMemo(
     () => createCalculationInputSignature(builderDraft, runtimeSettings, allSubstances),
     [allSubstances, builderDraft, runtimeSettings],
@@ -2703,6 +2822,7 @@ function App({ initialBuilderDraft = null }: AppProps) {
             calculationSummaryIsStale={calculationSummaryIsStale}
             onExportCalculationSummary={handleExportCalculationSummary}
             scenarioHistory={scenarioHistory}
+            environmentDerivedMetrics={environmentDerivedMetrics}
           />
         }
       />

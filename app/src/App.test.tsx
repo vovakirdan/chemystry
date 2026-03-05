@@ -184,6 +184,8 @@ describe("App pre-run validation", () => {
     expect(html).not.toContain('id="greet-form"');
     expect(html).toContain("Simulation workspace");
     expect(html).toContain('data-testid="simulation-workspace-summary"');
+    expect(html).toContain('data-testid="simulation-workspace-environment-sync"');
+    expect(html).toContain("Engine environment sync:");
   });
 
   it("uses human-friendly participant labels and does not leak raw participant ids", () => {

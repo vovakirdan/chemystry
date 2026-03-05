@@ -238,6 +238,44 @@ describe("RightPanelSkeleton stoichiometry summary", () => {
     expect(html).toContain("[12:34:56] Environment temperature set to 120 °C.");
   });
 
+  it("renders current vs baseline derived environment metrics with warnings and errors", () => {
+    const html = renderToStaticMarkup(
+      <RightPanelSkeleton
+        healthMessage="ok"
+        featureStatuses={[]}
+        environmentDerivedMetrics={{
+          current: {
+            temperatureK: 393.15,
+            pressureAtm: 2.5,
+            gasMedium: "vacuum",
+            gasMolarVolumeLPerMol: 12.911,
+            collisionRateIndex: 0.45,
+          },
+          baseline: {
+            temperatureK: 298.15,
+            pressureAtm: 1,
+            gasMedium: "gas",
+            gasMolarVolumeLPerMol: 24.465,
+            collisionRateIndex: 1,
+          },
+          warnings: ["Vacuum medium is selected while pressure is relatively high."],
+          errors: ["Pressure is out of supported range."],
+          updatedAtLabel: "14:22:10",
+        }}
+      />,
+    );
+
+    expect(html).toContain('data-testid="right-panel-summary-environment-metrics"');
+    expect(html).toContain('data-testid="right-panel-summary-environment-updated-at"');
+    expect(html).toContain('data-testid="right-panel-summary-environment-current"');
+    expect(html).toContain("Current T: 393.15 K");
+    expect(html).toContain("Current medium: vacuum");
+    expect(html).toContain('data-testid="right-panel-summary-environment-baseline"');
+    expect(html).toContain("Baseline medium: gas");
+    expect(html).toContain('data-testid="right-panel-summary-environment-warnings"');
+    expect(html).toContain('data-testid="right-panel-summary-environment-errors"');
+  });
+
   it("renders stale summary status when inputs changed after previous save/export", () => {
     const html = renderToStaticMarkup(
       <RightPanelSkeleton

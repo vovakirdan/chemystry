@@ -23,6 +23,22 @@ export type ScenarioHistoryEntry = {
   message: string;
 };
 
+export type EnvironmentDerivedMetricSnapshot = {
+  temperatureK: number | null;
+  pressureAtm: number | null;
+  gasMedium: GasMediumV1;
+  gasMolarVolumeLPerMol: number | null;
+  collisionRateIndex: number | null;
+};
+
+export type EnvironmentDerivedMetrics = {
+  current: EnvironmentDerivedMetricSnapshot;
+  baseline: EnvironmentDerivedMetricSnapshot | null;
+  warnings: ReadonlyArray<string>;
+  errors: ReadonlyArray<string>;
+  updatedAtLabel: string;
+};
+
 type RightPanelSkeletonProps = {
   healthMessage: string;
   featureStatuses: ReadonlyArray<RightPanelFeatureStatus>;
@@ -33,6 +49,7 @@ type RightPanelSkeletonProps = {
   calculationSummaryIsStale?: boolean;
   onExportCalculationSummary?: () => void;
   scenarioHistory?: ReadonlyArray<ScenarioHistoryEntry>;
+  environmentDerivedMetrics?: EnvironmentDerivedMetrics | null;
 };
 
 type RightPanelSectionDefinition = {
@@ -138,6 +155,7 @@ function RightPanelSkeleton({
   calculationSummaryIsStale = false,
   onExportCalculationSummary,
   scenarioHistory = [],
+  environmentDerivedMetrics = null,
 }: RightPanelSkeletonProps) {
   const [activeSection, setActiveSection] = useState<RightPanelSectionId>(
     DEFAULT_RIGHT_PANEL_SECTION,
@@ -505,6 +523,117 @@ function RightPanelSkeleton({
                         </li>
                       ))}
                     </ul>
+                  )}
+                </section>
+
+                <section
+                  className="right-panel-summary-block"
+                  aria-label="Environment derived metrics"
+                  data-testid="right-panel-summary-environment-metrics"
+                >
+                  <h4 className="panel-subtitle">What-if environment metrics</h4>
+                  {environmentDerivedMetrics === null ? (
+                    <p className="status-line" data-testid="right-panel-summary-environment-empty">
+                      Derived metrics are unavailable until environment controls are initialized.
+                    </p>
+                  ) : (
+                    <>
+                      <p
+                        className="status-line"
+                        data-testid="right-panel-summary-environment-updated-at"
+                      >
+                        Updated: {environmentDerivedMetrics.updatedAtLabel}
+                      </p>
+                      <ul
+                        className="status-list"
+                        data-testid="right-panel-summary-environment-current"
+                      >
+                        <li>
+                          Current T:{" "}
+                          {environmentDerivedMetrics.current.temperatureK === null
+                            ? "n/a"
+                            : `${environmentDerivedMetrics.current.temperatureK.toFixed(2)} K`}
+                        </li>
+                        <li>
+                          Current P:{" "}
+                          {environmentDerivedMetrics.current.pressureAtm === null
+                            ? "n/a"
+                            : `${environmentDerivedMetrics.current.pressureAtm.toFixed(3)} atm`}
+                        </li>
+                        <li>Current medium: {environmentDerivedMetrics.current.gasMedium}</li>
+                        <li>
+                          Current ideal molar volume:{" "}
+                          {environmentDerivedMetrics.current.gasMolarVolumeLPerMol === null
+                            ? "n/a"
+                            : `${environmentDerivedMetrics.current.gasMolarVolumeLPerMol.toFixed(3)} L/mol`}
+                        </li>
+                        <li>
+                          Current collision-rate index:{" "}
+                          {environmentDerivedMetrics.current.collisionRateIndex === null
+                            ? "n/a"
+                            : environmentDerivedMetrics.current.collisionRateIndex.toFixed(3)}
+                        </li>
+                      </ul>
+                      {environmentDerivedMetrics.baseline === null ? (
+                        <p
+                          className="status-line"
+                          data-testid="right-panel-summary-environment-baseline-empty"
+                        >
+                          Baseline metrics are not available yet.
+                        </p>
+                      ) : (
+                        <ul
+                          className="status-list"
+                          data-testid="right-panel-summary-environment-baseline"
+                        >
+                          <li>
+                            Baseline T:{" "}
+                            {environmentDerivedMetrics.baseline.temperatureK === null
+                              ? "n/a"
+                              : `${environmentDerivedMetrics.baseline.temperatureK.toFixed(2)} K`}
+                          </li>
+                          <li>
+                            Baseline P:{" "}
+                            {environmentDerivedMetrics.baseline.pressureAtm === null
+                              ? "n/a"
+                              : `${environmentDerivedMetrics.baseline.pressureAtm.toFixed(3)} atm`}
+                          </li>
+                          <li>Baseline medium: {environmentDerivedMetrics.baseline.gasMedium}</li>
+                          <li>
+                            Baseline ideal molar volume:{" "}
+                            {environmentDerivedMetrics.baseline.gasMolarVolumeLPerMol === null
+                              ? "n/a"
+                              : `${environmentDerivedMetrics.baseline.gasMolarVolumeLPerMol.toFixed(3)} L/mol`}
+                          </li>
+                          <li>
+                            Baseline collision-rate index:{" "}
+                            {environmentDerivedMetrics.baseline.collisionRateIndex === null
+                              ? "n/a"
+                              : environmentDerivedMetrics.baseline.collisionRateIndex.toFixed(3)}
+                          </li>
+                        </ul>
+                      )}
+                      {environmentDerivedMetrics.warnings.length > 0 ? (
+                        <ul
+                          className="status-list"
+                          data-testid="right-panel-summary-environment-warnings"
+                        >
+                          {environmentDerivedMetrics.warnings.map((warning, index) => (
+                            <li key={`environment-warning-${index.toString()}`}>{warning}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {environmentDerivedMetrics.errors.length > 0 ? (
+                        <ul
+                          className="status-list"
+                          data-testid="right-panel-summary-environment-errors"
+                        >
+                          {environmentDerivedMetrics.errors.map((error, index) => (
+                            <li key={`environment-error-${index.toString()}`}>{error}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </>
                   )}
                 </section>
 
