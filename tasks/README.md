@@ -26,13 +26,15 @@
 - [E14-security-and-reliability.md](./E14-security-and-reliability.md)
 - [E15-test-coverage-and-qa.md](./E15-test-coverage-and-qa.md)
 - [E16-packaging-and-release.md](./E16-packaging-and-release.md)
+- [E17-refactoring-and-architecture-hardening.md](./E17-refactoring-and-architecture-hardening.md)
 - [POST-MVP-backlog.md](./POST-MVP-backlog.md)
 
 ## Как исполнять
 
-1. Идти по эпикам по порядку `E01 -> E16`.
-2. Внутри эпика выполнять задачи в порядке `T01, T02...`, если не указано иное.
-3. Перед закрытием задачи проверить все acceptance criteria и quality gate.
+1. Базовый порядок: `E01 -> E17`.
+2. Текущее внеплановое исключение: сначала закрыть `E17` (рефакторинг/архитектурное усиление), затем продолжить базовый порядок с того места, где остановились.
+3. Внутри эпика выполнять задачи в порядке `T01, T02...`, если не указано иное.
+4. Перед закрытием задачи проверить все acceptance criteria и quality gate.
 
 ## Формат задачи
 
@@ -45,6 +47,6 @@
 
 ## Объем
 
-- MVP задач: 63
+- MVP задач: 68
 - Post-MVP задач: 6
-- Всего: 69
+- Всего: 74
