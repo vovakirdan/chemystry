@@ -17,6 +17,7 @@ import {
   greetV1,
   healthV1,
   importSdfMolV1,
+  importSmilesV1,
   isCommandErrorV1,
   listScenariosV1,
   listPresetsV1,
@@ -817,6 +818,54 @@ describe("ipc v1 client", () => {
       requestId: "req-import-invalid",
       category: "internal",
       code: "INVALID_IMPORT_PAYLOAD",
+    });
+  });
+
+  it("invokes import_smiles_v1 and parses imported payload", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-import-smiles",
+      importedCount: 1,
+      substances: [
+        {
+          id: "imported-substance-req-import-smiles-1",
+          name: "Ethanol",
+          formula: "C2O",
+          smiles: "CCO",
+          phase: "solid",
+          source: "imported",
+          molarMassGMol: 40.0208,
+        },
+      ],
+    });
+
+    await expect(
+      importSmilesV1({
+        fileName: "ethanol.smi",
+        contents: "CCO Ethanol",
+      }),
+    ).resolves.toEqual({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-import-smiles",
+      importedCount: 1,
+      substances: [
+        {
+          id: "imported-substance-req-import-smiles-1",
+          name: "Ethanol",
+          formula: "C2O",
+          smiles: "CCO",
+          phase: "solid",
+          source: "imported",
+          molarMassGMol: 40.0208,
+        },
+      ],
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith(IPC_COMMANDS_V1.importSmiles, {
+      input: {
+        fileName: "ethanol.smi",
+        contents: "CCO Ethanol",
+      },
     });
   });
 

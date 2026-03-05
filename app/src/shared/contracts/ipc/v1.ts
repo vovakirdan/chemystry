@@ -12,6 +12,7 @@ export const IPC_COMMANDS_V1 = {
   updateSubstance: "update_substance_v1",
   deleteSubstance: "delete_substance_v1",
   importSdfMol: "import_sdf_mol_v1",
+  importSmiles: "import_smiles_v1",
   listScenarios: "list_saved_scenarios_v1",
   saveScenario: "save_scenario_draft_v1",
   loadScenario: "load_scenario_draft_v1",
@@ -50,6 +51,7 @@ export interface SubstanceCatalogEntryV1 {
   id: string;
   name: string;
   formula: string;
+  smiles?: string | null;
   phase: SubstancePhaseV1;
   source: SubstanceSourceV1;
   molarMassGMol: number | null;
@@ -114,6 +116,16 @@ export interface ImportSdfMolV1Input {
 }
 
 export interface ImportSdfMolV1Output extends RequestScopedPayloadV1 {
+  importedCount: number;
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>;
+}
+
+export interface ImportSmilesV1Input {
+  fileName: string;
+  contents: string;
+}
+
+export interface ImportSmilesV1Output extends RequestScopedPayloadV1 {
   importedCount: number;
   substances: ReadonlyArray<SubstanceCatalogEntryV1>;
 }

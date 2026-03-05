@@ -7,6 +7,7 @@ use crate::infra::config::feature_flags::FeatureFlags as ConfigFeatureFlags;
 use crate::infra::errors::{CommandError, CommandResult};
 use crate::infra::logging;
 use crate::io::sdf_mol::{parse_sdf_mol, SdfMolParseError};
+use crate::io::smiles::{parse_smiles, SmilesParseError};
 use crate::storage::{
     NewScenarioRun, NewSubstance, ReactionTemplate, StorageError, StorageRepository, Substance,
     UpdateScenarioRun, UpdateSubstance,
@@ -35,6 +36,7 @@ const SAVE_SCENARIO_DRAFT_COMMAND_NAME: &str = "save_scenario_draft_v1";
 const LIST_SAVED_SCENARIOS_COMMAND_NAME: &str = "list_saved_scenarios_v1";
 const LOAD_SCENARIO_DRAFT_COMMAND_NAME: &str = "load_scenario_draft_v1";
 const IMPORT_SDF_MOL_COMMAND_NAME: &str = "import_sdf_mol_v1";
+const IMPORT_SMILES_COMMAND_NAME: &str = "import_smiles_v1";
 const SCENARIO_SNAPSHOT_T_SIM_S: f64 = 0.0;
 const SCENARIO_SNAPSHOT_VERSION: i64 = 1;
 const DEFAULT_SCENARIO_TEMPERATURE_K: f64 = 298.15;
@@ -232,6 +234,24 @@ pub struct ImportSdfMolV1Output {
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct ImportSmilesV1Input {
+    #[serde(default, alias = "file_name")]
+    pub file_name: Option<String>,
+    #[serde(default)]
+    pub contents: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportSmilesV1Output {
+    pub version: &'static str,
+    pub request_id: String,
+    pub imported_count: usize,
+    pub substances: Vec<SubstanceCatalogItemV1>,
+}
+
+#[derive(Debug, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveScenarioDraftV1Input {
     #[serde(default)]
     pub scenario_id: Option<String>,
@@ -329,6 +349,12 @@ pub struct ValidatedDeleteSubstanceV1Input {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedImportSdfMolV1Input {
+    pub file_name: String,
+    pub contents: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedImportSmilesV1Input {
     pub file_name: String,
     pub contents: String,
 }
@@ -617,7 +643,12 @@ pub fn validate_delete_substance_v1_input(
     })
 }
 
-fn validate_import_file_name(value: Option<&str>, request_id: &str) -> CommandResult<String> {
+fn validate_import_file_name_for_extensions(
+    value: Option<&str>,
+    request_id: &str,
+    extensions: &[&str],
+    extension_hint: &str,
+) -> CommandResult<String> {
     let file_name = validate_required_text_field(
         value,
         request_id,
@@ -627,15 +658,31 @@ fn validate_import_file_name(value: Option<&str>, request_id: &str) -> CommandRe
         MAX_IMPORT_FILE_NAME_LENGTH,
     )?;
     let normalized = file_name.to_ascii_lowercase();
-    if !normalized.ends_with(".sdf") && !normalized.ends_with(".mol") {
+    if !extensions
+        .iter()
+        .any(|extension| normalized.ends_with(extension))
+    {
         return Err(validation_error(
             request_id,
             "IMPORT_FILE_TYPE_UNSUPPORTED",
-            "`fileName` must end with `.sdf` or `.mol`.",
+            format!("`fileName` must end with {extension_hint}."),
         ));
     }
 
     Ok(file_name)
+}
+
+fn validate_import_sdf_mol_file_name(value: Option<&str>, request_id: &str) -> CommandResult<String> {
+    validate_import_file_name_for_extensions(value, request_id, &[".sdf", ".mol"], "`.sdf` or `.mol`")
+}
+
+fn validate_import_smiles_file_name(value: Option<&str>, request_id: &str) -> CommandResult<String> {
+    validate_import_file_name_for_extensions(
+        value,
+        request_id,
+        &[".smi", ".smiles", ".txt"],
+        "`.smi`, `.smiles`, or `.txt`",
+    )
 }
 
 fn validate_import_contents(value: Option<&str>, request_id: &str) -> CommandResult<String> {
@@ -673,7 +720,17 @@ pub fn validate_import_sdf_mol_v1_input(
     request_id: &str,
 ) -> CommandResult<ValidatedImportSdfMolV1Input> {
     Ok(ValidatedImportSdfMolV1Input {
-        file_name: validate_import_file_name(input.file_name.as_deref(), request_id)?,
+        file_name: validate_import_sdf_mol_file_name(input.file_name.as_deref(), request_id)?,
+        contents: validate_import_contents(input.contents.as_deref(), request_id)?,
+    })
+}
+
+pub fn validate_import_smiles_v1_input(
+    input: &ImportSmilesV1Input,
+    request_id: &str,
+) -> CommandResult<ValidatedImportSmilesV1Input> {
+    Ok(ValidatedImportSmilesV1Input {
+        file_name: validate_import_smiles_file_name(input.file_name.as_deref(), request_id)?,
         contents: validate_import_contents(input.contents.as_deref(), request_id)?,
     })
 }
@@ -1386,7 +1443,16 @@ fn map_storage_import_error(request_id: &str, error: StorageError) -> CommandErr
     }
 }
 
-fn map_import_parse_error(request_id: &str, error: SdfMolParseError) -> CommandErrorV1 {
+fn map_import_sdf_mol_parse_error(request_id: &str, error: SdfMolParseError) -> CommandErrorV1 {
+    CommandError::import(
+        CONTRACT_VERSION_V1,
+        request_id,
+        error.code,
+        error.with_context_message(),
+    )
+}
+
+fn map_import_smiles_parse_error(request_id: &str, error: SmilesParseError) -> CommandErrorV1 {
     CommandError::import(
         CONTRACT_VERSION_V1,
         request_id,
@@ -1710,7 +1776,7 @@ fn import_sdf_mol_v1_with_repository(
                 "[ipc] import_parse_failure command={} request_id={} details={}",
                 IMPORT_SDF_MOL_COMMAND_NAME, request_id, error
             );
-            map_import_parse_error(request_id, error)
+            map_import_sdf_mol_parse_error(request_id, error)
         })?;
 
     let existing = repository.list_substances().map_err(|error| {
@@ -1774,6 +1840,88 @@ fn import_sdf_mol_v1_with_repository(
         })?;
 
     Ok(ImportSdfMolV1Output {
+        version: CONTRACT_VERSION_V1,
+        request_id: request_id.to_string(),
+        imported_count: imported_substances.len(),
+        substances: imported_substances,
+    })
+}
+
+fn import_smiles_v1_with_repository(
+    input: &ImportSmilesV1Input,
+    repository: &StorageRepository,
+    request_id: &str,
+) -> CommandResult<ImportSmilesV1Output> {
+    let validated = validate_import_smiles_v1_input(input, request_id)?;
+    let parsed_substances = parse_smiles(&validated.file_name, &validated.contents).map_err(|error| {
+        eprintln!(
+            "[ipc] import_parse_failure command={} request_id={} details={}",
+            IMPORT_SMILES_COMMAND_NAME, request_id, error
+        );
+        map_import_smiles_parse_error(request_id, error)
+    })?;
+
+    let existing = repository.list_substances().map_err(|error| {
+        eprintln!(
+            "[ipc] storage_failure command={} request_id={} details={}",
+            IMPORT_SMILES_COMMAND_NAME, request_id, error
+        );
+        map_storage_import_error(request_id, error)
+    })?;
+    let mut seen_keys: std::collections::BTreeSet<(String, String)> = existing
+        .iter()
+        .map(|substance| import_duplicate_key(&substance.name, &substance.formula))
+        .collect();
+
+    let mut batched_inserts = Vec::with_capacity(parsed_substances.len());
+    let mut imported_substances = Vec::with_capacity(parsed_substances.len());
+    for (index, parsed) in parsed_substances.into_iter().enumerate() {
+        let duplicate_key = import_duplicate_key(&parsed.name, &parsed.formula);
+        if seen_keys.contains(&duplicate_key) {
+            return Err(CommandError::import(
+                CONTRACT_VERSION_V1,
+                request_id,
+                "IMPORT_DUPLICATE_SUBSTANCE",
+                format!(
+                    "Duplicate substance in `{}` at record {} (name=`{}`, formula=`{}`).",
+                    validated.file_name, parsed.record_index, parsed.name, parsed.formula
+                ),
+            ));
+        }
+        seen_keys.insert(duplicate_key);
+
+        let import_id = next_imported_substance_id(request_id, index + 1);
+        batched_inserts.push(NewSubstance {
+            id: import_id.clone(),
+            name: parsed.name.clone(),
+            formula: parsed.formula.clone(),
+            smiles: Some(parsed.smiles.clone()),
+            molar_mass_g_mol: parsed.molar_mass_g_mol,
+            phase_default: "solid".to_string(),
+            source_type: "imported".to_string(),
+        });
+        imported_substances.push(SubstanceCatalogItemV1 {
+            id: import_id,
+            name: parsed.name,
+            formula: parsed.formula,
+            smiles: Some(parsed.smiles),
+            molar_mass_g_mol: parsed.molar_mass_g_mol,
+            phase: "solid".to_string(),
+            source: "imported".to_string(),
+        });
+    }
+
+    repository
+        .create_substances_batch(&batched_inserts)
+        .map_err(|error| {
+            eprintln!(
+                "[ipc] storage_failure command={} request_id={} details={}",
+                IMPORT_SMILES_COMMAND_NAME, request_id, error
+            );
+            map_storage_import_error(request_id, error)
+        })?;
+
+    Ok(ImportSmilesV1Output {
         version: CONTRACT_VERSION_V1,
         request_id: request_id.to_string(),
         imported_count: imported_substances.len(),
@@ -2235,6 +2383,27 @@ pub fn import_sdf_mol_v1(
 }
 
 #[tauri::command]
+pub fn import_smiles_v1(
+    input: ImportSmilesV1Input,
+    repository: State<'_, StorageRepository>,
+) -> CommandResult<ImportSmilesV1Output> {
+    let request_id = logging::next_request_id();
+    logging::log_command_start(IMPORT_SMILES_COMMAND_NAME, &request_id);
+
+    let result = import_smiles_v1_with_repository(&input, &repository, &request_id);
+    match result {
+        Ok(output) => {
+            logging::log_command_success(IMPORT_SMILES_COMMAND_NAME, &request_id);
+            Ok(output)
+        }
+        Err(error) => {
+            logging::log_command_failure(IMPORT_SMILES_COMMAND_NAME, &error);
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
 pub fn save_scenario_draft_v1(
     input: SaveScenarioDraftV1Input,
     repository: State<'_, StorageRepository>,
@@ -2515,6 +2684,21 @@ M  END
 
    18446744073709551615  0  0  0  0  0            999 V2000
 M  END
+"
+        .to_string()
+    }
+
+    fn sample_valid_smiles() -> String {
+        "# Example lines
+CC Ethane
+O
+"
+        .to_string()
+    }
+
+    fn sample_invalid_unknown_element_smiles() -> String {
+        "CC Ethane
+Qq Unknownium
 "
         .to_string()
     }
@@ -3932,5 +4116,94 @@ M  END
             .expect_err("malicious atom count should return controlled error");
         assert_eq!(error.category, ErrorCategory::Import);
         assert_eq!(error.code, "IMPORT_MOL_ATOM_COUNT_TOO_LARGE");
+    }
+
+    #[test]
+    fn import_smiles_v1_imports_records_into_library() {
+        let (_temp_dir, repository) = setup_repository("import-smiles-success.sqlite3");
+        let request_id = "req-import-smiles-success";
+        let input = ImportSmilesV1Input {
+            file_name: Some("bundle.smi".to_string()),
+            contents: Some(sample_valid_smiles()),
+        };
+
+        let result = import_smiles_v1_with_repository(&input, &repository, request_id)
+            .expect("valid SMILES should import");
+
+        assert_eq!(result.version, CONTRACT_VERSION_V1);
+        assert_eq!(result.request_id, request_id);
+        assert_eq!(result.imported_count, 2);
+        assert_eq!(result.substances.len(), 2);
+        assert_eq!(result.substances[0].name, "Ethane");
+        assert_eq!(result.substances[0].formula, "C2");
+        assert_eq!(result.substances[0].smiles.as_deref(), Some("CC"));
+        assert_eq!(result.substances[0].phase, "solid");
+        assert_eq!(result.substances[0].source, "imported");
+        assert_eq!(result.substances[1].name, "Imported SMILES 2");
+        assert_eq!(result.substances[1].smiles.as_deref(), Some("O"));
+
+        let stored = repository
+            .list_substances()
+            .expect("must list imported smiles rows");
+        assert_eq!(stored.len(), 2);
+        assert!(stored
+            .iter()
+            .all(|substance| substance.source_type == "imported"));
+    }
+
+    #[test]
+    fn import_smiles_v1_rolls_back_batch_when_second_insert_fails() {
+        let (_temp_dir, repository) = setup_repository("import-smiles-rollback.sqlite3");
+        let request_id = "req-import-smiles-rollback";
+        repository
+            .create_substance(&NewSubstance {
+                id: format!("imported-substance-{request_id}-2"),
+                name: "Preexisting".to_string(),
+                formula: "Pz".to_string(),
+                smiles: Some("P".to_string()),
+                molar_mass_g_mol: 10.0,
+                phase_default: "solid".to_string(),
+                source_type: "imported".to_string(),
+            })
+            .expect("must create preexisting conflicting id row");
+
+        let input = ImportSmilesV1Input {
+            file_name: Some("bundle.smi".to_string()),
+            contents: Some(sample_valid_smiles()),
+        };
+
+        let error = import_smiles_v1_with_repository(&input, &repository, request_id)
+            .expect_err("second insert should fail on primary key conflict");
+        assert_eq!(error.category, ErrorCategory::Internal);
+        assert_eq!(error.code, "IMPORT_FAILED");
+
+        let stored = repository
+            .list_substances()
+            .expect("must list rows after failed import");
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].id, format!("imported-substance-{request_id}-2"));
+    }
+
+    #[test]
+    fn import_smiles_v1_returns_contextual_parse_error() {
+        let (_temp_dir, repository) = setup_repository("import-smiles-invalid.sqlite3");
+        let request_id = "req-import-smiles-invalid";
+        let input = ImportSmilesV1Input {
+            file_name: Some("broken.smi".to_string()),
+            contents: Some(sample_invalid_unknown_element_smiles()),
+        };
+
+        let error = import_smiles_v1_with_repository(&input, &repository, request_id)
+            .expect_err("unknown element should fail import");
+        assert_eq!(error.category, ErrorCategory::Import);
+        assert_eq!(error.code, "IMPORT_UNKNOWN_ELEMENT");
+        assert!(error.message.contains("file=broken.smi"));
+        assert!(error.message.contains("record=2"));
+        assert!(error.message.contains("line=2"));
+
+        let stored = repository
+            .list_substances()
+            .expect("must list rows after parse failure");
+        assert!(stored.is_empty());
     }
 }

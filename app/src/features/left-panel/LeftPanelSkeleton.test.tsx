@@ -47,6 +47,7 @@ function createLibraryViewModel(
     onTogglePhase: vi.fn(),
     onToggleSource: vi.fn(),
     onImportSdfMol: vi.fn(),
+    onImportSmiles: vi.fn(),
     substances: [],
     selectedSubstance: null,
     onSelectSubstance: vi.fn(),
@@ -171,6 +172,7 @@ describe("LeftPanelSkeleton library tab", () => {
     expect(html).toContain('data-testid="library-substance-list"');
     expect(html).toContain('data-testid="library-property-card"');
     expect(html).toContain('data-testid="library-import-sdf-mol-button"');
+    expect(html).toContain('data-testid="library-import-smiles-button"');
     expect(html).toContain(">Hydrogen<");
   });
 
@@ -187,6 +189,7 @@ describe("LeftPanelSkeleton library tab", () => {
     );
 
     expect(html).toContain('data-testid="library-import-sdf-mol-button" disabled=""');
+    expect(html).toContain('data-testid="library-import-smiles-button" disabled=""');
   });
 
   it("renders library error state message", () => {

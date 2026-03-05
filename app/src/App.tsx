@@ -50,6 +50,7 @@ import {
   ensureFeatureEnabledV1,
   healthV1,
   importSdfMolV1,
+  importSmilesV1,
   isCommandErrorV1,
   listPresetsV1,
   listScenariosV1,
@@ -1921,7 +1922,8 @@ function App({ initialBuilderDraft = null }: AppProps) {
   const [libraryMutationError, setLibraryMutationError] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<ReadonlyArray<AppNotification>>([]);
   const notificationIdRef = useRef(0);
-  const importFileInputRef = useRef<HTMLInputElement | null>(null);
+  const importSdfMolFileInputRef = useRef<HTMLInputElement | null>(null);
+  const importSmilesFileInputRef = useRef<HTMLInputElement | null>(null);
   const builderDraftHydratedRef = useRef(false);
   const previousSimulationStateRef = useRef<string | null>(null);
   const previousRuntimeSettingsRef = useRef<RightPanelRuntimeSettings | null>(null);
@@ -2948,9 +2950,37 @@ function App({ initialBuilderDraft = null }: AppProps) {
       return;
     }
 
-    const fileInput = importFileInputRef.current;
+    const fileInput = importSdfMolFileInputRef.current;
     if (fileInput === null) {
       const message = "Import file picker is unavailable in this environment.";
+      setLibraryMutationError(message);
+      enqueueNotification("error", message);
+      return;
+    }
+
+    fileInput.value = "";
+    fileInput.click();
+  }, [enqueueNotification, featureFlags, libraryMutationState]);
+
+  const handleImportSmilesClick = useCallback((): void => {
+    if (libraryMutationState !== "idle") {
+      return;
+    }
+
+    try {
+      ensureFeatureEnabledV1(featureFlags, "importExport");
+    } catch (error: unknown) {
+      const message = isCommandErrorV1(error)
+        ? formatCommandError(error)
+        : `Import SMILES is unavailable: ${String(error)}`;
+      setLibraryMutationError(message);
+      enqueueNotification("warn", message);
+      return;
+    }
+
+    const fileInput = importSmilesFileInputRef.current;
+    if (fileInput === null) {
+      const message = "SMILES import file picker is unavailable in this environment.";
       setLibraryMutationError(message);
       enqueueNotification("error", message);
       return;
@@ -2999,6 +3029,54 @@ function App({ initialBuilderDraft = null }: AppProps) {
         const message = isCommandErrorV1(error)
           ? `Import SDF/MOL error: ${formatCommandError(error)}`
           : `Import SDF/MOL error: ${String(error)}`;
+        setLibraryMutationError(message);
+        enqueueNotification("error", message);
+      } finally {
+        setLibraryMutationState("idle");
+      }
+    },
+    [enqueueNotification],
+  );
+
+  const handleImportSmilesFileChange = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+      const selectedFile = event.currentTarget.files?.[0] ?? null;
+      event.currentTarget.value = "";
+      if (selectedFile === null) {
+        return;
+      }
+
+      setLibraryMutationError(null);
+      setLibraryMutationState("importing");
+
+      try {
+        const contents = await selectedFile.text();
+        const result = await importSmilesV1({
+          fileName: selectedFile.name,
+          contents,
+        });
+
+        const importedSubstanceIds = new Set(result.substances.map((substance) => substance.id));
+        setAllSubstances((currentSubstances) =>
+          sortSubstancesByName([
+            ...currentSubstances.filter((substance) => !importedSubstanceIds.has(substance.id)),
+            ...result.substances,
+          ]),
+        );
+        if (result.substances.length > 0) {
+          setSelectedLibrarySubstanceId(result.substances[0]?.id ?? null);
+        }
+        setLibraryLoadState("ready");
+        setLibraryLoadError(null);
+
+        enqueueNotification(
+          "info",
+          `Imported ${result.importedCount} substance(s) from "${selectedFile.name}".`,
+        );
+      } catch (error: unknown) {
+        const message = isCommandErrorV1(error)
+          ? `Import SMILES error: ${formatCommandError(error)}`
+          : `Import SMILES error: ${String(error)}`;
         setLibraryMutationError(message);
         enqueueNotification("error", message);
       } finally {
@@ -3111,13 +3189,23 @@ function App({ initialBuilderDraft = null }: AppProps) {
   return (
     <div className="app-root">
       <input
-        ref={importFileInputRef}
+        ref={importSdfMolFileInputRef}
         type="file"
         accept=".sdf,.mol"
         style={{ display: "none" }}
         data-testid="library-import-file-input"
         onChange={(event) => {
           void handleImportSdfMolFileChange(event);
+        }}
+      />
+      <input
+        ref={importSmilesFileInputRef}
+        type="file"
+        accept=".smi,.smiles,.txt"
+        style={{ display: "none" }}
+        data-testid="library-import-smiles-file-input"
+        onChange={(event) => {
+          void handleImportSmilesFileChange(event);
         }}
       />
       <NotificationCenter notifications={notifications} onDismiss={dismissNotification} />
@@ -3135,6 +3223,7 @@ function App({ initialBuilderDraft = null }: AppProps) {
               onTogglePhase: handleLibraryPhaseToggle,
               onToggleSource: handleLibrarySourceToggle,
               onImportSdfMol: handleImportSdfMolClick,
+              onImportSmiles: handleImportSmilesClick,
               substances: filteredLibrarySubstances,
               selectedSubstance: selectedLibrarySubstance,
               onSelectSubstance: setSelectedLibrarySubstanceId,

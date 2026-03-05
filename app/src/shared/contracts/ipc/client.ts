@@ -17,6 +17,8 @@ import {
   type DeleteSubstanceV1Output,
   type ImportSdfMolV1Input,
   type ImportSdfMolV1Output,
+  type ImportSmilesV1Input,
+  type ImportSmilesV1Output,
   IPC_COMMANDS_V1,
   IPC_CONTRACT_VERSION_V1,
   type ListScenariosV1Output,
@@ -362,6 +364,7 @@ function parseSubstanceEntryV1(
       "molarMass",
     ]),
   );
+  const smilesValue = readFirstDefined(candidate, ["smiles"]);
 
   if (typeof id !== "string" || id.length === 0) {
     throw createInvalidSubstancePayloadError(
@@ -413,7 +416,14 @@ function parseSubstanceEntryV1(
     );
   }
 
-  return {
+  if (smilesValue !== undefined && smilesValue !== null && typeof smilesValue !== "string") {
+    throw createInvalidSubstancePayloadError(
+      `Substance "${id}" has an invalid smiles value.`,
+      requestId,
+    );
+  }
+
+  const parsedSubstance: SubstanceCatalogEntryV1 = {
     id,
     name,
     formula,
@@ -421,6 +431,12 @@ function parseSubstanceEntryV1(
     source,
     molarMassGMol: molarMass,
   };
+
+  if (smilesValue !== undefined) {
+    parsedSubstance.smiles = smilesValue as string | null;
+  }
+
+  return parsedSubstance;
 }
 
 function parseScenarioSummaryV1(
@@ -973,6 +989,10 @@ function parseImportSdfMolV1Output(payload: unknown): ImportSdfMolV1Output {
   };
 }
 
+function parseImportSmilesV1Output(payload: unknown): ImportSmilesV1Output {
+  return parseImportSdfMolV1Output(payload);
+}
+
 function parseListScenariosV1Output(payload: unknown): ListScenariosV1Output {
   if (!isRecord(payload)) {
     throw createInvalidScenarioPayloadError("Scenario list payload is not an object.");
@@ -1229,6 +1249,15 @@ export async function importSdfMolV1(input: ImportSdfMolV1Input): Promise<Import
   try {
     const payload = await invoke<unknown>(IPC_COMMANDS_V1.importSdfMol, { input });
     return parseImportSdfMolV1Output(payload);
+  } catch (error) {
+    throw normalizeCommandErrorV1(error);
+  }
+}
+
+export async function importSmilesV1(input: ImportSmilesV1Input): Promise<ImportSmilesV1Output> {
+  try {
+    const payload = await invoke<unknown>(IPC_COMMANDS_V1.importSmiles, { input });
+    return parseImportSmilesV1Output(payload);
   } catch (error) {
     throw normalizeCommandErrorV1(error);
   }

@@ -33,6 +33,7 @@ type LeftPanelLibraryViewModel = {
   onTogglePhase: (phase: (typeof LIBRARY_PHASE_FILTER_OPTIONS)[number]) => void;
   onToggleSource: (source: (typeof LIBRARY_SOURCE_FILTER_OPTIONS)[number]) => void;
   onImportSdfMol: () => void;
+  onImportSmiles: () => void;
   substances: ReadonlyArray<SubstanceCatalogEntryV1>;
   selectedSubstance: SubstanceCatalogEntryV1 | null;
   onSelectSubstance: (substanceId: string) => void;
@@ -530,6 +531,14 @@ function renderLibraryView(
           disabled={controlsDisabled}
         >
           Import SDF/MOL
+        </button>
+        <button
+          type="button"
+          data-testid="library-import-smiles-button"
+          onClick={libraryViewModel.onImportSmiles}
+          disabled={controlsDisabled}
+        >
+          Import SMILES
         </button>
       </div>
 
