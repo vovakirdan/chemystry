@@ -11,6 +11,7 @@ export const IPC_COMMANDS_V1 = {
   createSubstance: "create_substance_v1",
   updateSubstance: "update_substance_v1",
   deleteSubstance: "delete_substance_v1",
+  importSdfMol: "import_sdf_mol_v1",
   listScenarios: "list_saved_scenarios_v1",
   saveScenario: "save_scenario_draft_v1",
   loadScenario: "load_scenario_draft_v1",
@@ -105,6 +106,16 @@ export type UpdateSubstanceV1Output = SubstanceMutationV1Output;
 
 export interface DeleteSubstanceV1Output extends RequestScopedPayloadV1 {
   deleted: boolean;
+}
+
+export interface ImportSdfMolV1Input {
+  fileName: string;
+  contents: string;
+}
+
+export interface ImportSdfMolV1Output extends RequestScopedPayloadV1 {
+  importedCount: number;
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>;
 }
 
 export const BUILDER_PARTICIPANT_ROLES_V1 = ["reactant", "product"] as const;

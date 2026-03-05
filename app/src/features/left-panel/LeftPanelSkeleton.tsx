@@ -32,6 +32,7 @@ type LeftPanelLibraryViewModel = {
   selectedSources: ReadonlySet<(typeof LIBRARY_SOURCE_FILTER_OPTIONS)[number]>;
   onTogglePhase: (phase: (typeof LIBRARY_PHASE_FILTER_OPTIONS)[number]) => void;
   onToggleSource: (source: (typeof LIBRARY_SOURCE_FILTER_OPTIONS)[number]) => void;
+  onImportSdfMol: () => void;
   substances: ReadonlyArray<SubstanceCatalogEntryV1>;
   selectedSubstance: SubstanceCatalogEntryV1 | null;
   onSelectSubstance: (substanceId: string) => void;
@@ -520,6 +521,16 @@ function renderLibraryView(
           data-testid="library-search-input"
           disabled={controlsDisabled}
         />
+      </div>
+      <div className="left-panel-library-import">
+        <button
+          type="button"
+          data-testid="library-import-sdf-mol-button"
+          onClick={libraryViewModel.onImportSdfMol}
+          disabled={controlsDisabled}
+        >
+          Import SDF/MOL
+        </button>
       </div>
 
       <div className="left-panel-library-filter-row">

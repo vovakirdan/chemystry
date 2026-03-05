@@ -15,6 +15,8 @@ import {
   type CreateSubstanceV1Output,
   type DeleteSubstanceV1Input,
   type DeleteSubstanceV1Output,
+  type ImportSdfMolV1Input,
+  type ImportSdfMolV1Output,
   IPC_COMMANDS_V1,
   IPC_CONTRACT_VERSION_V1,
   type ListScenariosV1Output,
@@ -66,6 +68,7 @@ const USER_MESSAGE_BY_CODE_V1: Record<string, string> = {
   FEATURE_DISABLED: "This module is disabled by configuration.",
   INVALID_SUBSTANCE_PAYLOAD: "Substance catalog data is invalid. Please retry.",
   INVALID_PRESET_PAYLOAD: "Preset library data is invalid. Please retry.",
+  INVALID_IMPORT_PAYLOAD: "Import payload is invalid. Please retry.",
   INVALID_SCENARIO_PAYLOAD: "Scenario data is invalid. Please retry.",
 };
 
@@ -142,6 +145,19 @@ function createInvalidPresetPayloadError(
     requestId,
     category: "internal",
     code: "INVALID_PRESET_PAYLOAD",
+    message,
+  };
+}
+
+function createInvalidImportPayloadError(
+  message: string,
+  requestId: string = nextClientRequestId(),
+): CommandErrorV1 {
+  return {
+    version: IPC_CONTRACT_VERSION_V1,
+    requestId,
+    category: "internal",
+    code: "INVALID_IMPORT_PAYLOAD",
     message,
   };
 }
@@ -915,6 +931,48 @@ function parseDeleteSubstanceV1Output(payload: unknown): DeleteSubstanceV1Output
   };
 }
 
+function parseImportSdfMolV1Output(payload: unknown): ImportSdfMolV1Output {
+  if (!isRecord(payload)) {
+    throw createInvalidImportPayloadError("Import payload is not an object.");
+  }
+
+  const requestId =
+    typeof payload.requestId === "string" ? payload.requestId : nextClientRequestId();
+  if (payload.version !== IPC_CONTRACT_VERSION_V1) {
+    throw createInvalidImportPayloadError("Import payload version is invalid.", requestId);
+  }
+
+  const importedCount = readFirstDefined(payload, ["importedCount", "imported_count"]);
+  if (typeof importedCount !== "number" || !Number.isInteger(importedCount) || importedCount < 0) {
+    throw createInvalidImportPayloadError(
+      "Import payload is missing a valid importedCount value.",
+      requestId,
+    );
+  }
+
+  if (!Array.isArray(payload.substances)) {
+    throw createInvalidImportPayloadError("Import payload is missing substances list.", requestId);
+  }
+
+  const substances = payload.substances.map((candidate, index) =>
+    parseSubstanceEntryV1(candidate, requestId, index),
+  );
+
+  if (substances.length !== importedCount) {
+    throw createInvalidImportPayloadError(
+      "Import payload has inconsistent importedCount and substances length.",
+      requestId,
+    );
+  }
+
+  return {
+    version: IPC_CONTRACT_VERSION_V1,
+    requestId,
+    importedCount,
+    substances,
+  };
+}
+
 function parseListScenariosV1Output(payload: unknown): ListScenariosV1Output {
   if (!isRecord(payload)) {
     throw createInvalidScenarioPayloadError("Scenario list payload is not an object.");
@@ -1162,6 +1220,15 @@ export async function deleteSubstanceV1(
   try {
     const payload = await invoke<unknown>(IPC_COMMANDS_V1.deleteSubstance, { input });
     return parseDeleteSubstanceV1Output(payload);
+  } catch (error) {
+    throw normalizeCommandErrorV1(error);
+  }
+}
+
+export async function importSdfMolV1(input: ImportSdfMolV1Input): Promise<ImportSdfMolV1Output> {
+  try {
+    const payload = await invoke<unknown>(IPC_COMMANDS_V1.importSdfMol, { input });
+    return parseImportSdfMolV1Output(payload);
   } catch (error) {
     throw normalizeCommandErrorV1(error);
   }

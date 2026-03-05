@@ -16,6 +16,7 @@ import {
   getFeatureFlagsV1,
   greetV1,
   healthV1,
+  importSdfMolV1,
   isCommandErrorV1,
   listScenariosV1,
   listPresetsV1,
@@ -724,6 +725,98 @@ describe("ipc v1 client", () => {
       requestId: "req-delete-invalid",
       category: "internal",
       code: "INVALID_SUBSTANCE_PAYLOAD",
+    });
+  });
+
+  it("invokes import_sdf_mol_v1 and parses imported payload", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-import",
+      imported_count: 2,
+      substances: [
+        {
+          id: "imported-substance-req-import-1",
+          name: "Water",
+          formula: "H2O",
+          phase_default: "solid",
+          source_type: "imported",
+          molar_mass_g_mol: 18.01528,
+        },
+        {
+          id: "imported-substance-req-import-2",
+          name: "Methane",
+          formula: "CH4",
+          phase: "gas",
+          source: "imported",
+          molarMassGMol: 16.04246,
+        },
+      ],
+    });
+
+    await expect(
+      importSdfMolV1({
+        fileName: "bundle.sdf",
+        contents: "mock file contents",
+      }),
+    ).resolves.toEqual({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-import",
+      importedCount: 2,
+      substances: [
+        {
+          id: "imported-substance-req-import-1",
+          name: "Water",
+          formula: "H2O",
+          phase: "solid",
+          source: "imported",
+          molarMassGMol: 18.01528,
+        },
+        {
+          id: "imported-substance-req-import-2",
+          name: "Methane",
+          formula: "CH4",
+          phase: "gas",
+          source: "imported",
+          molarMassGMol: 16.04246,
+        },
+      ],
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith(IPC_COMMANDS_V1.importSdfMol, {
+      input: {
+        fileName: "bundle.sdf",
+        contents: "mock file contents",
+      },
+    });
+  });
+
+  it("rejects import_sdf_mol_v1 payloads when importedCount does not match substance list", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-import-invalid",
+      importedCount: 2,
+      substances: [
+        {
+          id: "imported-substance-req-import-invalid-1",
+          name: "Water",
+          formula: "H2O",
+          phase: "solid",
+          source: "imported",
+          molarMassGMol: 18.01528,
+        },
+      ],
+    });
+
+    await expect(
+      importSdfMolV1({
+        fileName: "broken.sdf",
+        contents: "broken",
+      }),
+    ).rejects.toMatchObject({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-import-invalid",
+      category: "internal",
+      code: "INVALID_IMPORT_PAYLOAD",
     });
   });
 

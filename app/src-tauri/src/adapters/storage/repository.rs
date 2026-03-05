@@ -204,6 +204,40 @@ impl StorageRepository {
         })
     }
 
+    pub fn create_substances_batch(&self, inputs: &[NewSubstance]) -> Result<(), StorageError> {
+        if inputs.is_empty() {
+            return Ok(());
+        }
+
+        let mut connection = self.open()?;
+        let transaction = connection.transaction().map_err(|error| {
+            self.sqlite_error("failed to begin substance batch transaction", error)
+        })?;
+
+        for input in inputs {
+            transaction
+                .execute(
+                    "INSERT INTO substance(
+                        id, name, formula, smiles, molar_mass_g_mol, phase_default, source_type
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![
+                        input.id,
+                        input.name,
+                        input.formula,
+                        input.smiles,
+                        input.molar_mass_g_mol,
+                        input.phase_default,
+                        input.source_type
+                    ],
+                )
+                .map_err(|error| self.sqlite_error("failed to insert batched substance", error))?;
+        }
+
+        transaction.commit().map_err(|error| {
+            self.sqlite_error("failed to commit substance batch transaction", error)
+        })
+    }
+
     pub fn get_substance(&self, id: &str) -> Result<Option<Substance>, StorageError> {
         let connection = self.open()?;
         let mut statement = connection

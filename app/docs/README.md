@@ -31,6 +31,7 @@
 - Environment controls and scenario history logging (E11-T01): `environment-controls-e11-t01.md`
 - Live derived environment metrics (E11-T02): `environment-derived-metrics-e11-t02.md`
 - Scenario workflow save/reset/rewind (E11-T03): `environment-workflow-e11-t03.md`
+- SDF/MOL import MVP (E12-T01): `import-sdf-mol-e12-t01.md`
 - Schema dump (E04-T02): `schema-dump-e04-t02.sql`
 - Schema dump (E04-T03): `schema-dump-e04-t03.sql`
 - Storage JSON fields (E04-T03): `storage-json-fields-e04-t03.md`

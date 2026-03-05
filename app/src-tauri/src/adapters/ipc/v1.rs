@@ -6,6 +6,7 @@ use tauri::State;
 use crate::infra::config::feature_flags::FeatureFlags as ConfigFeatureFlags;
 use crate::infra::errors::{CommandError, CommandResult};
 use crate::infra::logging;
+use crate::io::sdf_mol::{parse_sdf_mol, SdfMolParseError};
 use crate::storage::{
     NewScenarioRun, NewSubstance, ReactionTemplate, StorageError, StorageRepository, Substance,
     UpdateScenarioRun, UpdateSubstance,
@@ -20,6 +21,8 @@ const MAX_SCENARIO_NAME_LENGTH: usize = 160;
 const MAX_SUBSTANCE_NAME_LENGTH: usize = 128;
 const MAX_SUBSTANCE_FORMULA_LENGTH: usize = 64;
 const MAX_SUBSTANCE_SMILES_LENGTH: usize = 512;
+const MAX_IMPORT_FILE_NAME_LENGTH: usize = 260;
+const MAX_IMPORT_CONTENTS_LENGTH: usize = 8 * 1024 * 1024;
 const GREET_COMMAND_NAME: &str = "greet_v1";
 const HEALTH_COMMAND_NAME: &str = "health_v1";
 const GET_FEATURE_FLAGS_COMMAND_NAME: &str = "get_feature_flags_v1";
@@ -31,6 +34,7 @@ const DELETE_SUBSTANCE_COMMAND_NAME: &str = "delete_substance_v1";
 const SAVE_SCENARIO_DRAFT_COMMAND_NAME: &str = "save_scenario_draft_v1";
 const LIST_SAVED_SCENARIOS_COMMAND_NAME: &str = "list_saved_scenarios_v1";
 const LOAD_SCENARIO_DRAFT_COMMAND_NAME: &str = "load_scenario_draft_v1";
+const IMPORT_SDF_MOL_COMMAND_NAME: &str = "import_sdf_mol_v1";
 const SCENARIO_SNAPSHOT_T_SIM_S: f64 = 0.0;
 const SCENARIO_SNAPSHOT_VERSION: i64 = 1;
 const DEFAULT_SCENARIO_TEMPERATURE_K: f64 = 298.15;
@@ -210,6 +214,24 @@ pub struct DeleteSubstanceV1Output {
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct ImportSdfMolV1Input {
+    #[serde(default, alias = "file_name")]
+    pub file_name: Option<String>,
+    #[serde(default)]
+    pub contents: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportSdfMolV1Output {
+    pub version: &'static str,
+    pub request_id: String,
+    pub imported_count: usize,
+    pub substances: Vec<SubstanceCatalogItemV1>,
+}
+
+#[derive(Debug, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveScenarioDraftV1Input {
     #[serde(default)]
     pub scenario_id: Option<String>,
@@ -303,6 +325,12 @@ pub struct ValidatedUpdateSubstanceV1Input {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedDeleteSubstanceV1Input {
     pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedImportSdfMolV1Input {
+    pub file_name: String,
+    pub contents: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -586,6 +614,67 @@ pub fn validate_delete_substance_v1_input(
 ) -> CommandResult<ValidatedDeleteSubstanceV1Input> {
     Ok(ValidatedDeleteSubstanceV1Input {
         id: validate_substance_id(input.id.as_deref(), request_id)?,
+    })
+}
+
+fn validate_import_file_name(value: Option<&str>, request_id: &str) -> CommandResult<String> {
+    let file_name = validate_required_text_field(
+        value,
+        request_id,
+        "fileName",
+        "IMPORT_FILE_NAME_REQUIRED",
+        "IMPORT_FILE_NAME_TOO_LONG",
+        MAX_IMPORT_FILE_NAME_LENGTH,
+    )?;
+    let normalized = file_name.to_ascii_lowercase();
+    if !normalized.ends_with(".sdf") && !normalized.ends_with(".mol") {
+        return Err(validation_error(
+            request_id,
+            "IMPORT_FILE_TYPE_UNSUPPORTED",
+            "`fileName` must end with `.sdf` or `.mol`.",
+        ));
+    }
+
+    Ok(file_name)
+}
+
+fn validate_import_contents(value: Option<&str>, request_id: &str) -> CommandResult<String> {
+    let Some(contents) = value else {
+        return Err(validation_error(
+            request_id,
+            "IMPORT_CONTENTS_REQUIRED",
+            "`contents` is required.",
+        ));
+    };
+
+    if contents.trim().is_empty() {
+        return Err(validation_error(
+            request_id,
+            "IMPORT_CONTENTS_EMPTY",
+            "`contents` must not be empty.",
+        ));
+    }
+
+    if contents.len() > MAX_IMPORT_CONTENTS_LENGTH {
+        return Err(validation_error(
+            request_id,
+            "IMPORT_CONTENTS_TOO_LARGE",
+            format!(
+                "`contents` must be at most {MAX_IMPORT_CONTENTS_LENGTH} bytes for MVP import."
+            ),
+        ));
+    }
+
+    Ok(contents.to_string())
+}
+
+pub fn validate_import_sdf_mol_v1_input(
+    input: &ImportSdfMolV1Input,
+    request_id: &str,
+) -> CommandResult<ValidatedImportSdfMolV1Input> {
+    Ok(ValidatedImportSdfMolV1Input {
+        file_name: validate_import_file_name(input.file_name.as_deref(), request_id)?,
+        contents: validate_import_contents(input.contents.as_deref(), request_id)?,
     })
 }
 
@@ -1264,6 +1353,48 @@ fn map_storage_delete_error(request_id: &str, error: StorageError) -> CommandErr
     )
 }
 
+fn map_storage_import_error(request_id: &str, error: StorageError) -> CommandErrorV1 {
+    if let Some(mapped_error) = map_substance_unique_constraint_error(request_id, &error) {
+        return CommandError::import(
+            CONTRACT_VERSION_V1,
+            request_id,
+            "IMPORT_DUPLICATE_SUBSTANCE",
+            mapped_error.message,
+        );
+    }
+
+    match error {
+        StorageError::AppDataPathResolution(_)
+        | StorageError::InvalidDatabasePath(_)
+        | StorageError::InvalidBackupFormat { .. }
+        | StorageError::Io { .. } => CommandError::io(
+            CONTRACT_VERSION_V1,
+            request_id,
+            "IMPORT_IO_FAILED",
+            "Failed to write imported substances to local catalog storage.",
+        ),
+        StorageError::Sqlite { .. }
+        | StorageError::InvalidMigrationPlan(_)
+        | StorageError::DataInvariant(_)
+        | StorageError::AsyncTaskJoin(_)
+        | StorageError::MigrationFailed { .. } => CommandError::internal(
+            CONTRACT_VERSION_V1,
+            request_id,
+            "IMPORT_FAILED",
+            "Failed to persist imported substances in local catalog.",
+        ),
+    }
+}
+
+fn map_import_parse_error(request_id: &str, error: SdfMolParseError) -> CommandErrorV1 {
+    CommandError::import(
+        CONTRACT_VERSION_V1,
+        request_id,
+        error.code,
+        error.with_context_message(),
+    )
+}
+
 fn ensure_substance_is_user_defined(substance: &Substance, request_id: &str) -> CommandResult<()> {
     if substance.source_type != "user_defined" {
         return Err(validation_error(
@@ -1278,6 +1409,14 @@ fn ensure_substance_is_user_defined(substance: &Substance, request_id: &str) -> 
 
 fn next_user_defined_substance_id(request_id: &str) -> String {
     format!("user-substance-{request_id}")
+}
+
+fn next_imported_substance_id(request_id: &str, record_index: usize) -> String {
+    format!("imported-substance-{request_id}-{record_index}")
+}
+
+fn import_duplicate_key(name: &str, formula: &str) -> (String, String) {
+    (name.trim().to_lowercase(), formula.trim().to_lowercase())
 }
 
 fn map_storage_query_error(request_id: &str, error: StorageError) -> CommandErrorV1 {
@@ -1556,6 +1695,89 @@ fn delete_substance_v1_with_repository(
         version: CONTRACT_VERSION_V1,
         request_id: request_id.to_string(),
         deleted,
+    })
+}
+
+fn import_sdf_mol_v1_with_repository(
+    input: &ImportSdfMolV1Input,
+    repository: &StorageRepository,
+    request_id: &str,
+) -> CommandResult<ImportSdfMolV1Output> {
+    let validated = validate_import_sdf_mol_v1_input(input, request_id)?;
+    let parsed_substances =
+        parse_sdf_mol(&validated.file_name, &validated.contents).map_err(|error| {
+            eprintln!(
+                "[ipc] import_parse_failure command={} request_id={} details={}",
+                IMPORT_SDF_MOL_COMMAND_NAME, request_id, error
+            );
+            map_import_parse_error(request_id, error)
+        })?;
+
+    let existing = repository.list_substances().map_err(|error| {
+        eprintln!(
+            "[ipc] storage_failure command={} request_id={} details={}",
+            IMPORT_SDF_MOL_COMMAND_NAME, request_id, error
+        );
+        map_storage_import_error(request_id, error)
+    })?;
+    let mut seen_keys: std::collections::BTreeSet<(String, String)> = existing
+        .iter()
+        .map(|substance| import_duplicate_key(&substance.name, &substance.formula))
+        .collect();
+
+    let mut batched_inserts = Vec::with_capacity(parsed_substances.len());
+    let mut imported_substances = Vec::with_capacity(parsed_substances.len());
+    for (index, parsed) in parsed_substances.into_iter().enumerate() {
+        let duplicate_key = import_duplicate_key(&parsed.name, &parsed.formula);
+        if seen_keys.contains(&duplicate_key) {
+            return Err(CommandError::import(
+                CONTRACT_VERSION_V1,
+                request_id,
+                "IMPORT_DUPLICATE_SUBSTANCE",
+                format!(
+                    "Duplicate substance in `{}` at record {} (name=`{}`, formula=`{}`).",
+                    validated.file_name, parsed.record_index, parsed.name, parsed.formula
+                ),
+            ));
+        }
+        seen_keys.insert(duplicate_key);
+
+        let import_id = next_imported_substance_id(request_id, index + 1);
+        batched_inserts.push(NewSubstance {
+            id: import_id.clone(),
+            name: parsed.name.clone(),
+            formula: parsed.formula.clone(),
+            smiles: None,
+            molar_mass_g_mol: parsed.molar_mass_g_mol,
+            phase_default: "solid".to_string(),
+            source_type: "imported".to_string(),
+        });
+        imported_substances.push(SubstanceCatalogItemV1 {
+            id: import_id,
+            name: parsed.name,
+            formula: parsed.formula,
+            smiles: None,
+            molar_mass_g_mol: parsed.molar_mass_g_mol,
+            phase: "solid".to_string(),
+            source: "imported".to_string(),
+        });
+    }
+
+    repository
+        .create_substances_batch(&batched_inserts)
+        .map_err(|error| {
+            eprintln!(
+                "[ipc] storage_failure command={} request_id={} details={}",
+                IMPORT_SDF_MOL_COMMAND_NAME, request_id, error
+            );
+            map_storage_import_error(request_id, error)
+        })?;
+
+    Ok(ImportSdfMolV1Output {
+        version: CONTRACT_VERSION_V1,
+        request_id: request_id.to_string(),
+        imported_count: imported_substances.len(),
+        substances: imported_substances,
     })
 }
 
@@ -1992,6 +2214,27 @@ pub fn delete_substance_v1(
 }
 
 #[tauri::command]
+pub fn import_sdf_mol_v1(
+    input: ImportSdfMolV1Input,
+    repository: State<'_, StorageRepository>,
+) -> CommandResult<ImportSdfMolV1Output> {
+    let request_id = logging::next_request_id();
+    logging::log_command_start(IMPORT_SDF_MOL_COMMAND_NAME, &request_id);
+
+    let result = import_sdf_mol_v1_with_repository(&input, &repository, &request_id);
+    match result {
+        Ok(output) => {
+            logging::log_command_success(IMPORT_SDF_MOL_COMMAND_NAME, &request_id);
+            Ok(output)
+        }
+        Err(error) => {
+            logging::log_command_failure(IMPORT_SDF_MOL_COMMAND_NAME, &error);
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
 pub fn save_scenario_draft_v1(
     input: SaveScenarioDraftV1Input,
     repository: State<'_, StorageRepository>,
@@ -2219,6 +2462,61 @@ mod tests {
             runtime: Some(sample_runtime_payload()),
             calculation_summary: None,
         }
+    }
+
+    fn sample_water_mol() -> String {
+        "Water
+  ChemYstry
+
+  3  2  0  0  0  0            999 V2000
+    0.0000    0.0000    0.0000 O   0  0  0  0  0  0
+    0.7570    0.5860    0.0000 H   0  0  0  0  0  0
+   -0.7570    0.5860    0.0000 H   0  0  0  0  0  0
+  1  2  1  0  0  0  0
+  1  3  1  0  0  0  0
+M  END
+"
+        .to_string()
+    }
+
+    fn sample_methane_mol() -> String {
+        "Methane
+  ChemYstry
+
+  5  4  0  0  0  0            999 V2000
+    0.0000    0.0000    0.0000 C   0  0  0  0  0  0
+    0.6291    0.6291    0.6291 H   0  0  0  0  0  0
+   -0.6291   -0.6291    0.6291 H   0  0  0  0  0  0
+   -0.6291    0.6291   -0.6291 H   0  0  0  0  0  0
+    0.6291   -0.6291   -0.6291 H   0  0  0  0  0  0
+  1  2  1  0  0  0  0
+  1  3  1  0  0  0  0
+  1  4  1  0  0  0  0
+  1  5  1  0  0  0  0
+M  END
+"
+        .to_string()
+    }
+
+    fn sample_invalid_unknown_element_mol() -> String {
+        "UnknownElement
+  ChemYstry
+
+  1  0  0  0  0  0            999 V2000
+    0.0000    0.0000    0.0000 Qx  0  0  0  0  0  0
+M  END
+"
+        .to_string()
+    }
+
+    fn sample_malicious_atom_count_mol() -> String {
+        "MaliciousCounts
+  ChemYstry
+
+   18446744073709551615  0  0  0  0  0            999 V2000
+M  END
+"
+        .to_string()
     }
 
     #[test]
@@ -3472,5 +3770,167 @@ mod tests {
             padded_result_type_error.code,
             "SCENARIO_CALCULATION_SUMMARY_INVALID"
         );
+    }
+
+    #[test]
+    fn import_sdf_mol_v1_imports_single_mol_record() {
+        let (_temp_dir, repository) = setup_repository("import-single-mol.sqlite3");
+        let request_id = "req-import-single-mol";
+        let input = ImportSdfMolV1Input {
+            file_name: Some("water.mol".to_string()),
+            contents: Some(sample_water_mol()),
+        };
+
+        let result = import_sdf_mol_v1_with_repository(&input, &repository, request_id)
+            .expect("valid MOL should import");
+
+        assert_eq!(result.version, CONTRACT_VERSION_V1);
+        assert_eq!(result.request_id, request_id);
+        assert_eq!(result.imported_count, 1);
+        assert_eq!(result.substances.len(), 1);
+        assert_eq!(result.substances[0].name, "Water");
+        assert_eq!(result.substances[0].formula, "H2O");
+        assert_eq!(result.substances[0].phase, "solid");
+        assert_eq!(result.substances[0].source, "imported");
+        assert!((result.substances[0].molar_mass_g_mol - 18.01528).abs() < 0.0001);
+
+        let stored = repository
+            .get_substance(&result.substances[0].id)
+            .expect("must load imported substance")
+            .expect("imported substance must exist");
+        assert_eq!(stored.source_type, "imported");
+        assert_eq!(stored.phase_default, "solid");
+    }
+
+    #[test]
+    fn import_sdf_mol_v1_imports_multiple_sdf_records() {
+        let (_temp_dir, repository) = setup_repository("import-multi-sdf.sqlite3");
+        let request_id = "req-import-multi-sdf";
+        let input = ImportSdfMolV1Input {
+            file_name: Some("bundle.sdf".to_string()),
+            contents: Some(format!(
+                "{}$$$$\n{}$$$$\n",
+                sample_water_mol(),
+                sample_methane_mol()
+            )),
+        };
+
+        let result = import_sdf_mol_v1_with_repository(&input, &repository, request_id)
+            .expect("valid SDF should import");
+
+        assert_eq!(result.imported_count, 2);
+        assert_eq!(result.substances.len(), 2);
+        assert_eq!(result.substances[0].source, "imported");
+        assert_eq!(result.substances[1].source, "imported");
+        assert_eq!(
+            result.substances[0].id,
+            "imported-substance-req-import-multi-sdf-1"
+        );
+        assert_eq!(
+            result.substances[1].id,
+            "imported-substance-req-import-multi-sdf-2"
+        );
+
+        let stored = repository
+            .list_substances()
+            .expect("must list imported substances");
+        assert_eq!(stored.len(), 2);
+        assert!(stored
+            .iter()
+            .all(|substance| substance.source_type == "imported"));
+    }
+
+    #[test]
+    fn import_sdf_mol_v1_rolls_back_batch_when_second_insert_fails() {
+        let (_temp_dir, repository) = setup_repository("import-rollback.sqlite3");
+        let request_id = "req-import-rollback";
+        repository
+            .create_substance(&NewSubstance {
+                id: format!("imported-substance-{request_id}-2"),
+                name: "Preexisting".to_string(),
+                formula: "Pz".to_string(),
+                smiles: None,
+                molar_mass_g_mol: 10.0,
+                phase_default: "solid".to_string(),
+                source_type: "imported".to_string(),
+            })
+            .expect("must create preexisting conflicting id row");
+
+        let input = ImportSdfMolV1Input {
+            file_name: Some("bundle.sdf".to_string()),
+            contents: Some(format!(
+                "{}$$$$\n{}$$$$\n",
+                sample_water_mol(),
+                sample_methane_mol()
+            )),
+        };
+
+        let error = import_sdf_mol_v1_with_repository(&input, &repository, request_id)
+            .expect_err("second insert should fail on primary key conflict");
+        assert_eq!(error.category, ErrorCategory::Internal);
+        assert_eq!(error.code, "IMPORT_FAILED");
+
+        let stored = repository
+            .list_substances()
+            .expect("must list rows after failed import");
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].id, format!("imported-substance-{request_id}-2"));
+    }
+
+    #[test]
+    fn import_sdf_mol_v1_keeps_database_clean_when_second_record_is_invalid() {
+        let (_temp_dir, repository) = setup_repository("import-invalid-second-record.sqlite3");
+        let request_id = "req-import-invalid-second-record";
+        let input = ImportSdfMolV1Input {
+            file_name: Some("mixed.sdf".to_string()),
+            contents: Some(format!(
+                "{}$$$$\n{}$$$$\n",
+                sample_water_mol(),
+                sample_invalid_unknown_element_mol()
+            )),
+        };
+
+        let error = import_sdf_mol_v1_with_repository(&input, &repository, request_id)
+            .expect_err("second broken record should fail import");
+        assert_eq!(error.category, ErrorCategory::Import);
+        assert_eq!(error.code, "IMPORT_UNKNOWN_ELEMENT");
+
+        let stored = repository
+            .list_substances()
+            .expect("must list rows after parse failure");
+        assert!(stored.is_empty());
+    }
+
+    #[test]
+    fn import_sdf_mol_v1_returns_contextual_parse_error_for_invalid_file() {
+        let (_temp_dir, repository) = setup_repository("import-invalid.sqlite3");
+        let request_id = "req-import-invalid";
+        let input = ImportSdfMolV1Input {
+            file_name: Some("broken.mol".to_string()),
+            contents: Some(sample_invalid_unknown_element_mol()),
+        };
+
+        let error = import_sdf_mol_v1_with_repository(&input, &repository, request_id)
+            .expect_err("unknown elements must fail import");
+        assert_eq!(error.category, ErrorCategory::Import);
+        assert_eq!(error.code, "IMPORT_UNKNOWN_ELEMENT");
+        assert!(error.message.contains("file=broken.mol"));
+        assert!(error.message.contains("record=1"));
+        assert!(error.message.contains("line=5"));
+    }
+
+    #[test]
+    fn import_sdf_mol_v1_rejects_malicious_atom_count_without_panic() {
+        let (_temp_dir, repository) = setup_repository("import-malicious-counts.sqlite3");
+        let request_id = "req-import-malicious-counts";
+        let input = ImportSdfMolV1Input {
+            file_name: Some("malicious.mol".to_string()),
+            contents: Some(sample_malicious_atom_count_mol()),
+        };
+
+        let error = import_sdf_mol_v1_with_repository(&input, &repository, request_id)
+            .expect_err("malicious atom count should return controlled error");
+        assert_eq!(error.category, ErrorCategory::Import);
+        assert_eq!(error.code, "IMPORT_MOL_ATOM_COUNT_TOO_LARGE");
     }
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AppShell from "./app/layout/AppShell";
 import CenterPanelSkeleton, {
   CENTER_TIMELINE_INITIAL,
@@ -49,6 +49,7 @@ import {
   deleteSubstanceV1,
   ensureFeatureEnabledV1,
   healthV1,
+  importSdfMolV1,
   isCommandErrorV1,
   listPresetsV1,
   listScenariosV1,
@@ -1915,11 +1916,12 @@ function App({ initialBuilderDraft = null }: AppProps) {
     ReadonlyArray<string>
   >([]);
   const [libraryMutationState, setLibraryMutationState] = useState<
-    "idle" | "creating" | "updating" | "deleting"
+    "idle" | "creating" | "updating" | "deleting" | "importing"
   >("idle");
   const [libraryMutationError, setLibraryMutationError] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<ReadonlyArray<AppNotification>>([]);
   const notificationIdRef = useRef(0);
+  const importFileInputRef = useRef<HTMLInputElement | null>(null);
   const builderDraftHydratedRef = useRef(false);
   const previousSimulationStateRef = useRef<string | null>(null);
   const previousRuntimeSettingsRef = useRef<RightPanelRuntimeSettings | null>(null);
@@ -2930,6 +2932,82 @@ function App({ initialBuilderDraft = null }: AppProps) {
     }
   }, [enqueueNotification, selectedEditableLibrarySubstance]);
 
+  const handleImportSdfMolClick = useCallback((): void => {
+    if (libraryMutationState !== "idle") {
+      return;
+    }
+
+    try {
+      ensureFeatureEnabledV1(featureFlags, "importExport");
+    } catch (error: unknown) {
+      const message = isCommandErrorV1(error)
+        ? formatCommandError(error)
+        : `Import SDF/MOL is unavailable: ${String(error)}`;
+      setLibraryMutationError(message);
+      enqueueNotification("warn", message);
+      return;
+    }
+
+    const fileInput = importFileInputRef.current;
+    if (fileInput === null) {
+      const message = "Import file picker is unavailable in this environment.";
+      setLibraryMutationError(message);
+      enqueueNotification("error", message);
+      return;
+    }
+
+    fileInput.value = "";
+    fileInput.click();
+  }, [enqueueNotification, featureFlags, libraryMutationState]);
+
+  const handleImportSdfMolFileChange = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+      const selectedFile = event.currentTarget.files?.[0] ?? null;
+      event.currentTarget.value = "";
+      if (selectedFile === null) {
+        return;
+      }
+
+      setLibraryMutationError(null);
+      setLibraryMutationState("importing");
+
+      try {
+        const contents = await selectedFile.text();
+        const result = await importSdfMolV1({
+          fileName: selectedFile.name,
+          contents,
+        });
+
+        const importedSubstanceIds = new Set(result.substances.map((substance) => substance.id));
+        setAllSubstances((currentSubstances) =>
+          sortSubstancesByName([
+            ...currentSubstances.filter((substance) => !importedSubstanceIds.has(substance.id)),
+            ...result.substances,
+          ]),
+        );
+        if (result.substances.length > 0) {
+          setSelectedLibrarySubstanceId(result.substances[0]?.id ?? null);
+        }
+        setLibraryLoadState("ready");
+        setLibraryLoadError(null);
+
+        enqueueNotification(
+          "info",
+          `Imported ${result.importedCount} substance(s) from "${selectedFile.name}".`,
+        );
+      } catch (error: unknown) {
+        const message = isCommandErrorV1(error)
+          ? `Import SDF/MOL error: ${formatCommandError(error)}`
+          : `Import SDF/MOL error: ${String(error)}`;
+        setLibraryMutationError(message);
+        enqueueNotification("error", message);
+      } finally {
+        setLibraryMutationState("idle");
+      }
+    },
+    [enqueueNotification],
+  );
+
   const rightPanelFeatureStatuses: ReadonlyArray<RightPanelFeatureStatus> = FEATURE_KEYS.map(
     (feature) => ({
       id: feature,
@@ -3032,6 +3110,16 @@ function App({ initialBuilderDraft = null }: AppProps) {
 
   return (
     <div className="app-root">
+      <input
+        ref={importFileInputRef}
+        type="file"
+        accept=".sdf,.mol"
+        style={{ display: "none" }}
+        data-testid="library-import-file-input"
+        onChange={(event) => {
+          void handleImportSdfMolFileChange(event);
+        }}
+      />
       <NotificationCenter notifications={notifications} onDismiss={dismissNotification} />
       <AppShell
         leftPanel={
@@ -3046,6 +3134,7 @@ function App({ initialBuilderDraft = null }: AppProps) {
               selectedSources: selectedLibrarySources,
               onTogglePhase: handleLibraryPhaseToggle,
               onToggleSource: handleLibrarySourceToggle,
+              onImportSdfMol: handleImportSdfMolClick,
               substances: filteredLibrarySubstances,
               selectedSubstance: selectedLibrarySubstance,
               onSelectSubstance: setSelectedLibrarySubstanceId,

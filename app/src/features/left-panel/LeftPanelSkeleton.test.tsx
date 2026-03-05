@@ -46,6 +46,7 @@ function createLibraryViewModel(
     selectedSources: new Set(["builtin", "imported", "user"] as const),
     onTogglePhase: vi.fn(),
     onToggleSource: vi.fn(),
+    onImportSdfMol: vi.fn(),
     substances: [],
     selectedSubstance: null,
     onSelectSubstance: vi.fn(),
@@ -169,7 +170,23 @@ describe("LeftPanelSkeleton library tab", () => {
     expect(html).toContain('data-testid="library-filter-source-builtin"');
     expect(html).toContain('data-testid="library-substance-list"');
     expect(html).toContain('data-testid="library-property-card"');
+    expect(html).toContain('data-testid="library-import-sdf-mol-button"');
     expect(html).toContain(">Hydrogen<");
+  });
+
+  it("disables import button while mutation is in progress", () => {
+    const html = renderToStaticMarkup(
+      <LeftPanelSkeleton
+        {...createLeftPanelProps({
+          activeTab: "library",
+          libraryViewModel: createLibraryViewModel({
+            isMutating: true,
+          }),
+        })}
+      />,
+    );
+
+    expect(html).toContain('data-testid="library-import-sdf-mol-button" disabled=""');
   });
 
   it("renders library error state message", () => {
