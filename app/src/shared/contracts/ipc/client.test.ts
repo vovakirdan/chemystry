@@ -18,6 +18,7 @@ import {
   healthV1,
   importSdfMolV1,
   importSmilesV1,
+  importXyzV1,
   isCommandErrorV1,
   listScenariosV1,
   listPresetsV1,
@@ -866,6 +867,114 @@ describe("ipc v1 client", () => {
         fileName: "ethanol.smi",
         contents: "CCO Ethanol",
       },
+    });
+  });
+
+  it("invokes import_xyz_v1 and parses inference summaries", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-import-xyz",
+      importedCount: 1,
+      substances: [
+        {
+          id: "imported-substance-req-import-xyz-1",
+          name: "Water",
+          formula: "H2O",
+          phase: "solid",
+          source: "imported",
+          molarMassGMol: 18.01528,
+        },
+      ],
+      inference_summaries: [
+        {
+          record_index: 1,
+          inferred_bond_count: 2,
+          avg_confidence: 0.9142,
+          min_confidence: 0.8821,
+        },
+      ],
+    });
+
+    await expect(
+      importXyzV1({
+        fileName: "water.xyz",
+        contents: "xyz contents",
+      }),
+    ).resolves.toEqual({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-import-xyz",
+      importedCount: 1,
+      substances: [
+        {
+          id: "imported-substance-req-import-xyz-1",
+          name: "Water",
+          formula: "H2O",
+          phase: "solid",
+          source: "imported",
+          molarMassGMol: 18.01528,
+        },
+      ],
+      inferenceSummaries: [
+        {
+          recordIndex: 1,
+          inferredBondCount: 2,
+          avgConfidence: 0.9142,
+          minConfidence: 0.8821,
+        },
+      ],
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith(IPC_COMMANDS_V1.importXyz, {
+      input: {
+        fileName: "water.xyz",
+        contents: "xyz contents",
+      },
+    });
+  });
+
+  it("rejects import_xyz_v1 payloads when inference summary count mismatches importedCount", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-import-xyz-invalid",
+      importedCount: 2,
+      substances: [
+        {
+          id: "imported-substance-req-import-xyz-invalid-1",
+          name: "Water",
+          formula: "H2O",
+          phase: "solid",
+          source: "imported",
+          molarMassGMol: 18.01528,
+        },
+        {
+          id: "imported-substance-req-import-xyz-invalid-2",
+          name: "Methane",
+          formula: "CH4",
+          phase: "gas",
+          source: "imported",
+          molarMassGMol: 16.04246,
+        },
+      ],
+      inference_summaries: [
+        {
+          record_index: 1,
+          inferred_bond_count: 2,
+          avg_confidence: 0.9142,
+          min_confidence: 0.8821,
+        },
+      ],
+    });
+
+    await expect(
+      importXyzV1({
+        fileName: "bundle.xyz",
+        contents: "xyz contents",
+      }),
+    ).rejects.toMatchObject({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-import-xyz-invalid",
+      category: "internal",
+      code: "INVALID_IMPORT_PAYLOAD",
     });
   });
 

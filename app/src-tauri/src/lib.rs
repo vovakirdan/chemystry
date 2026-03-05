@@ -53,7 +53,8 @@ pub fn run() {
             ipc_v1::load_scenario_draft_v1,
             ipc_v1::query_substances_v1,
             ipc_v1::import_sdf_mol_v1,
-            ipc_v1::import_smiles_v1
+            ipc_v1::import_smiles_v1,
+            ipc_v1::import_xyz_v1
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

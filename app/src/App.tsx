@@ -51,6 +51,7 @@ import {
   healthV1,
   importSdfMolV1,
   importSmilesV1,
+  importXyzV1,
   isCommandErrorV1,
   listPresetsV1,
   listScenariosV1,
@@ -67,6 +68,7 @@ import type {
   CalculationSummaryEntryV1,
   CalculationSummaryV1,
   CommandErrorV1,
+  ImportXyzInferenceSummaryV1,
   PresetCatalogEntryV1,
   ScenarioPayloadV1,
   ScenarioSummaryV1,
@@ -1124,6 +1126,28 @@ function formatCommandError(error: CommandErrorV1): string {
   return `${toUserFacingMessageV1(error)} [${error.code}] (ref: ${error.requestId})`;
 }
 
+function formatXyzInferenceNotificationSummary(
+  summaries: ReadonlyArray<ImportXyzInferenceSummaryV1>,
+): string {
+  if (summaries.length === 0) {
+    return (
+      "No inferred bonds were detected in the imported records " +
+      "(possible for isolated atoms or large inter-atom distances)."
+    );
+  }
+
+  const preview = summaries
+    .slice(0, 3)
+    .map(
+      (summary) =>
+        `record ${summary.recordIndex}: bonds=${summary.inferredBondCount}, avg=${summary.avgConfidence.toFixed(2)}, min=${summary.minConfidence.toFixed(2)}`,
+    )
+    .join("; ");
+  const suffix = summaries.length > 3 ? `; +${(summaries.length - 3).toString()} more` : "";
+
+  return `XYZ bond confidence (heuristic): ${preview}${suffix}.`;
+}
+
 function resolveSimulationState(state: CenterPanelControlState): string {
   if (state.isPlaying) {
     return "Running";
@@ -1924,6 +1948,7 @@ function App({ initialBuilderDraft = null }: AppProps) {
   const notificationIdRef = useRef(0);
   const importSdfMolFileInputRef = useRef<HTMLInputElement | null>(null);
   const importSmilesFileInputRef = useRef<HTMLInputElement | null>(null);
+  const importXyzFileInputRef = useRef<HTMLInputElement | null>(null);
   const builderDraftHydratedRef = useRef(false);
   const previousSimulationStateRef = useRef<string | null>(null);
   const previousRuntimeSettingsRef = useRef<RightPanelRuntimeSettings | null>(null);
@@ -2990,6 +3015,38 @@ function App({ initialBuilderDraft = null }: AppProps) {
     fileInput.click();
   }, [enqueueNotification, featureFlags, libraryMutationState]);
 
+  const handleImportXyzClick = useCallback((): void => {
+    if (libraryMutationState !== "idle") {
+      return;
+    }
+
+    try {
+      ensureFeatureEnabledV1(featureFlags, "importExport");
+    } catch (error: unknown) {
+      const message = isCommandErrorV1(error)
+        ? formatCommandError(error)
+        : `Import XYZ is unavailable: ${String(error)}`;
+      setLibraryMutationError(message);
+      enqueueNotification("warn", message);
+      return;
+    }
+
+    const fileInput = importXyzFileInputRef.current;
+    if (fileInput === null) {
+      const message = "XYZ import file picker is unavailable in this environment.";
+      setLibraryMutationError(message);
+      enqueueNotification("error", message);
+      return;
+    }
+
+    enqueueNotification(
+      "warn",
+      "XYZ bond inference is heuristic (distance + covalent radii) and may be inaccurate for edge cases.",
+    );
+    fileInput.value = "";
+    fileInput.click();
+  }, [enqueueNotification, featureFlags, libraryMutationState]);
+
   const handleImportSdfMolFileChange = useCallback(
     async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
       const selectedFile = event.currentTarget.files?.[0] ?? null;
@@ -3077,6 +3134,55 @@ function App({ initialBuilderDraft = null }: AppProps) {
         const message = isCommandErrorV1(error)
           ? `Import SMILES error: ${formatCommandError(error)}`
           : `Import SMILES error: ${String(error)}`;
+        setLibraryMutationError(message);
+        enqueueNotification("error", message);
+      } finally {
+        setLibraryMutationState("idle");
+      }
+    },
+    [enqueueNotification],
+  );
+
+  const handleImportXyzFileChange = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+      const selectedFile = event.currentTarget.files?.[0] ?? null;
+      event.currentTarget.value = "";
+      if (selectedFile === null) {
+        return;
+      }
+
+      setLibraryMutationError(null);
+      setLibraryMutationState("importing");
+
+      try {
+        const contents = await selectedFile.text();
+        const result = await importXyzV1({
+          fileName: selectedFile.name,
+          contents,
+        });
+
+        const importedSubstanceIds = new Set(result.substances.map((substance) => substance.id));
+        setAllSubstances((currentSubstances) =>
+          sortSubstancesByName([
+            ...currentSubstances.filter((substance) => !importedSubstanceIds.has(substance.id)),
+            ...result.substances,
+          ]),
+        );
+        if (result.substances.length > 0) {
+          setSelectedLibrarySubstanceId(result.substances[0]?.id ?? null);
+        }
+        setLibraryLoadState("ready");
+        setLibraryLoadError(null);
+
+        const summaryText = formatXyzInferenceNotificationSummary(result.inferenceSummaries);
+        enqueueNotification(
+          "info",
+          `Imported ${result.importedCount} substance(s) from "${selectedFile.name}". ${summaryText}`,
+        );
+      } catch (error: unknown) {
+        const message = isCommandErrorV1(error)
+          ? `Import XYZ error: ${formatCommandError(error)}`
+          : `Import XYZ error: ${String(error)}`;
         setLibraryMutationError(message);
         enqueueNotification("error", message);
       } finally {
@@ -3208,6 +3314,16 @@ function App({ initialBuilderDraft = null }: AppProps) {
           void handleImportSmilesFileChange(event);
         }}
       />
+      <input
+        ref={importXyzFileInputRef}
+        type="file"
+        accept=".xyz"
+        style={{ display: "none" }}
+        data-testid="library-import-xyz-file-input"
+        onChange={(event) => {
+          void handleImportXyzFileChange(event);
+        }}
+      />
       <NotificationCenter notifications={notifications} onDismiss={dismissNotification} />
       <AppShell
         leftPanel={
@@ -3224,6 +3340,7 @@ function App({ initialBuilderDraft = null }: AppProps) {
               onToggleSource: handleLibrarySourceToggle,
               onImportSdfMol: handleImportSdfMolClick,
               onImportSmiles: handleImportSmilesClick,
+              onImportXyz: handleImportXyzClick,
               substances: filteredLibrarySubstances,
               selectedSubstance: selectedLibrarySubstance,
               onSelectSubstance: setSelectedLibrarySubstanceId,

@@ -34,6 +34,7 @@ type LeftPanelLibraryViewModel = {
   onToggleSource: (source: (typeof LIBRARY_SOURCE_FILTER_OPTIONS)[number]) => void;
   onImportSdfMol: () => void;
   onImportSmiles: () => void;
+  onImportXyz: () => void;
   substances: ReadonlyArray<SubstanceCatalogEntryV1>;
   selectedSubstance: SubstanceCatalogEntryV1 | null;
   onSelectSubstance: (substanceId: string) => void;
@@ -540,7 +541,19 @@ function renderLibraryView(
         >
           Import SMILES
         </button>
+        <button
+          type="button"
+          data-testid="library-import-xyz-button"
+          onClick={libraryViewModel.onImportXyz}
+          disabled={controlsDisabled}
+        >
+          Import XYZ
+        </button>
       </div>
+      <p className="left-panel-library-import-warning" data-testid="library-import-xyz-warning">
+        XYZ bonds are inferred heuristically from distances/covalent radii; verify connectivity for
+        edge cases.
+      </p>
 
       <div className="left-panel-library-filter-row">
         <fieldset

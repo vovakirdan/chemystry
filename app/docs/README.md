@@ -33,6 +33,7 @@
 - Scenario workflow save/reset/rewind (E11-T03): `environment-workflow-e11-t03.md`
 - SDF/MOL import MVP (E12-T01): `import-sdf-mol-e12-t01.md`
 - SMILES import MVP (E12-T02): `import-smiles-e12-t02.md`
+- XYZ import + bond inference MVP (E12-T03): `import-xyz-e12-t03.md`
 - Schema dump (E04-T02): `schema-dump-e04-t02.sql`
 - Schema dump (E04-T03): `schema-dump-e04-t03.sql`
 - Storage JSON fields (E04-T03): `storage-json-fields-e04-t03.md`

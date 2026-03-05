@@ -19,6 +19,9 @@ import {
   type ImportSdfMolV1Output,
   type ImportSmilesV1Input,
   type ImportSmilesV1Output,
+  type ImportXyzInferenceSummaryV1,
+  type ImportXyzV1Input,
+  type ImportXyzV1Output,
   IPC_COMMANDS_V1,
   IPC_CONTRACT_VERSION_V1,
   type ListScenariosV1Output,
@@ -993,6 +996,116 @@ function parseImportSmilesV1Output(payload: unknown): ImportSmilesV1Output {
   return parseImportSdfMolV1Output(payload);
 }
 
+function parseImportXyzInferenceSummaryV1(
+  candidate: unknown,
+  requestId: string,
+  index: number,
+): ImportXyzInferenceSummaryV1 {
+  if (!isRecord(candidate)) {
+    throw createInvalidImportPayloadError(
+      `XYZ inference summary at index ${index.toString()} is not an object.`,
+      requestId,
+    );
+  }
+
+  const recordIndex = readFirstDefined(candidate, ["recordIndex", "record_index"]);
+  const inferredBondCount = readFirstDefined(candidate, [
+    "inferredBondCount",
+    "inferred_bond_count",
+  ]);
+  const avgConfidence = readFirstDefined(candidate, ["avgConfidence", "avg_confidence"]);
+  const minConfidence = readFirstDefined(candidate, ["minConfidence", "min_confidence"]);
+
+  if (typeof recordIndex !== "number" || !Number.isInteger(recordIndex) || recordIndex <= 0) {
+    throw createInvalidImportPayloadError(
+      `XYZ inference summary at index ${index.toString()} has invalid recordIndex.`,
+      requestId,
+    );
+  }
+  if (
+    typeof inferredBondCount !== "number" ||
+    !Number.isInteger(inferredBondCount) ||
+    inferredBondCount < 0
+  ) {
+    throw createInvalidImportPayloadError(
+      `XYZ inference summary at index ${index.toString()} has invalid inferredBondCount.`,
+      requestId,
+    );
+  }
+  if (
+    typeof avgConfidence !== "number" ||
+    !Number.isFinite(avgConfidence) ||
+    avgConfidence < 0 ||
+    avgConfidence > 1
+  ) {
+    throw createInvalidImportPayloadError(
+      `XYZ inference summary at index ${index.toString()} has invalid avgConfidence.`,
+      requestId,
+    );
+  }
+  if (
+    typeof minConfidence !== "number" ||
+    !Number.isFinite(minConfidence) ||
+    minConfidence < 0 ||
+    minConfidence > 1
+  ) {
+    throw createInvalidImportPayloadError(
+      `XYZ inference summary at index ${index.toString()} has invalid minConfidence.`,
+      requestId,
+    );
+  }
+
+  return {
+    recordIndex,
+    inferredBondCount,
+    avgConfidence,
+    minConfidence,
+  };
+}
+
+function parseImportXyzV1Output(payload: unknown): ImportXyzV1Output {
+  const parsedBase = parseImportSdfMolV1Output(payload);
+  if (!isRecord(payload)) {
+    throw createInvalidImportPayloadError("Import payload is not an object.");
+  }
+
+  const summariesCandidate = readFirstDefined(payload, [
+    "inferenceSummaries",
+    "inference_summaries",
+  ]);
+  if (!Array.isArray(summariesCandidate)) {
+    throw createInvalidImportPayloadError(
+      "XYZ import payload is missing inference summaries list.",
+      parsedBase.requestId,
+    );
+  }
+
+  if (parsedBase.importedCount !== parsedBase.substances.length) {
+    throw createInvalidImportPayloadError(
+      "XYZ import payload has inconsistent importedCount and substances length.",
+      parsedBase.requestId,
+    );
+  }
+
+  const inferenceSummaries = summariesCandidate.map((candidate, index) =>
+    parseImportXyzInferenceSummaryV1(candidate, parsedBase.requestId, index),
+  );
+  if (inferenceSummaries.length !== parsedBase.importedCount) {
+    throw createInvalidImportPayloadError(
+      "XYZ import payload has inconsistent inferenceSummaries and importedCount.",
+      parsedBase.requestId,
+    );
+  }
+
+  return {
+    version: parsedBase.version,
+    requestId: parsedBase.requestId,
+    importedCount: parsedBase.importedCount,
+    substances: parsedBase.substances,
+    inferenceSummaries,
+  };
+}
+
 function parseListScenariosV1Output(payload: unknown): ListScenariosV1Output {
   if (!isRecord(payload)) {
     throw createInvalidScenarioPayloadError("Scenario list payload is not an object.");
@@ -1258,6 +1371,15 @@ export async function importSmilesV1(input: ImportSmilesV1Input): Promise<Import
   try {
     const payload = await invoke<unknown>(IPC_COMMANDS_V1.importSmiles, { input });
     return parseImportSmilesV1Output(payload);
+  } catch (error) {
+    throw normalizeCommandErrorV1(error);
+  }
+}
+
+export async function importXyzV1(input: ImportXyzV1Input): Promise<ImportXyzV1Output> {
+  try {
+    const payload = await invoke<unknown>(IPC_COMMANDS_V1.importXyz, { input });
+    return parseImportXyzV1Output(payload);
   } catch (error) {
     throw normalizeCommandErrorV1(error);
   }

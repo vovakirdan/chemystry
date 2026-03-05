@@ -8,6 +8,7 @@ use crate::infra::errors::{CommandError, CommandResult};
 use crate::infra::logging;
 use crate::io::sdf_mol::{parse_sdf_mol, SdfMolParseError};
 use crate::io::smiles::{parse_smiles, SmilesParseError};
+use crate::io::xyz::{parse_xyz, XyzParseError};
 use crate::storage::{
     NewScenarioRun, NewSubstance, ReactionTemplate, StorageError, StorageRepository, Substance,
     UpdateScenarioRun, UpdateSubstance,
@@ -37,6 +38,7 @@ const LIST_SAVED_SCENARIOS_COMMAND_NAME: &str = "list_saved_scenarios_v1";
 const LOAD_SCENARIO_DRAFT_COMMAND_NAME: &str = "load_scenario_draft_v1";
 const IMPORT_SDF_MOL_COMMAND_NAME: &str = "import_sdf_mol_v1";
 const IMPORT_SMILES_COMMAND_NAME: &str = "import_smiles_v1";
+const IMPORT_XYZ_COMMAND_NAME: &str = "import_xyz_v1";
 const SCENARIO_SNAPSHOT_T_SIM_S: f64 = 0.0;
 const SCENARIO_SNAPSHOT_VERSION: i64 = 1;
 const DEFAULT_SCENARIO_TEMPERATURE_K: f64 = 298.15;
@@ -252,6 +254,34 @@ pub struct ImportSmilesV1Output {
 
 #[derive(Debug, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct ImportXyzV1Input {
+    #[serde(default, alias = "file_name")]
+    pub file_name: Option<String>,
+    #[serde(default)]
+    pub contents: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportXyzInferenceSummaryV1 {
+    pub record_index: usize,
+    pub inferred_bond_count: usize,
+    pub avg_confidence: f64,
+    pub min_confidence: f64,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportXyzV1Output {
+    pub version: &'static str,
+    pub request_id: String,
+    pub imported_count: usize,
+    pub substances: Vec<SubstanceCatalogItemV1>,
+    pub inference_summaries: Vec<ImportXyzInferenceSummaryV1>,
+}
+
+#[derive(Debug, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveScenarioDraftV1Input {
     #[serde(default)]
     pub scenario_id: Option<String>,
@@ -355,6 +385,12 @@ pub struct ValidatedImportSdfMolV1Input {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedImportSmilesV1Input {
+    pub file_name: String,
+    pub contents: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedImportXyzV1Input {
     pub file_name: String,
     pub contents: String,
 }
@@ -672,17 +708,32 @@ fn validate_import_file_name_for_extensions(
     Ok(file_name)
 }
 
-fn validate_import_sdf_mol_file_name(value: Option<&str>, request_id: &str) -> CommandResult<String> {
-    validate_import_file_name_for_extensions(value, request_id, &[".sdf", ".mol"], "`.sdf` or `.mol`")
+fn validate_import_sdf_mol_file_name(
+    value: Option<&str>,
+    request_id: &str,
+) -> CommandResult<String> {
+    validate_import_file_name_for_extensions(
+        value,
+        request_id,
+        &[".sdf", ".mol"],
+        "`.sdf` or `.mol`",
+    )
 }
 
-fn validate_import_smiles_file_name(value: Option<&str>, request_id: &str) -> CommandResult<String> {
+fn validate_import_smiles_file_name(
+    value: Option<&str>,
+    request_id: &str,
+) -> CommandResult<String> {
     validate_import_file_name_for_extensions(
         value,
         request_id,
         &[".smi", ".smiles", ".txt"],
         "`.smi`, `.smiles`, or `.txt`",
     )
+}
+
+fn validate_import_xyz_file_name(value: Option<&str>, request_id: &str) -> CommandResult<String> {
+    validate_import_file_name_for_extensions(value, request_id, &[".xyz"], "`.xyz`")
 }
 
 fn validate_import_contents(value: Option<&str>, request_id: &str) -> CommandResult<String> {
@@ -731,6 +782,16 @@ pub fn validate_import_smiles_v1_input(
 ) -> CommandResult<ValidatedImportSmilesV1Input> {
     Ok(ValidatedImportSmilesV1Input {
         file_name: validate_import_smiles_file_name(input.file_name.as_deref(), request_id)?,
+        contents: validate_import_contents(input.contents.as_deref(), request_id)?,
+    })
+}
+
+pub fn validate_import_xyz_v1_input(
+    input: &ImportXyzV1Input,
+    request_id: &str,
+) -> CommandResult<ValidatedImportXyzV1Input> {
+    Ok(ValidatedImportXyzV1Input {
+        file_name: validate_import_xyz_file_name(input.file_name.as_deref(), request_id)?,
         contents: validate_import_contents(input.contents.as_deref(), request_id)?,
     })
 }
@@ -1461,6 +1522,15 @@ fn map_import_smiles_parse_error(request_id: &str, error: SmilesParseError) -> C
     )
 }
 
+fn map_import_xyz_parse_error(request_id: &str, error: XyzParseError) -> CommandErrorV1 {
+    CommandError::import(
+        CONTRACT_VERSION_V1,
+        request_id,
+        error.code,
+        error.with_context_message(),
+    )
+}
+
 fn ensure_substance_is_user_defined(substance: &Substance, request_id: &str) -> CommandResult<()> {
     if substance.source_type != "user_defined" {
         return Err(validation_error(
@@ -1853,13 +1923,14 @@ fn import_smiles_v1_with_repository(
     request_id: &str,
 ) -> CommandResult<ImportSmilesV1Output> {
     let validated = validate_import_smiles_v1_input(input, request_id)?;
-    let parsed_substances = parse_smiles(&validated.file_name, &validated.contents).map_err(|error| {
-        eprintln!(
-            "[ipc] import_parse_failure command={} request_id={} details={}",
-            IMPORT_SMILES_COMMAND_NAME, request_id, error
-        );
-        map_import_smiles_parse_error(request_id, error)
-    })?;
+    let parsed_substances =
+        parse_smiles(&validated.file_name, &validated.contents).map_err(|error| {
+            eprintln!(
+                "[ipc] import_parse_failure command={} request_id={} details={}",
+                IMPORT_SMILES_COMMAND_NAME, request_id, error
+            );
+            map_import_smiles_parse_error(request_id, error)
+        })?;
 
     let existing = repository.list_substances().map_err(|error| {
         eprintln!(
@@ -1926,6 +1997,97 @@ fn import_smiles_v1_with_repository(
         request_id: request_id.to_string(),
         imported_count: imported_substances.len(),
         substances: imported_substances,
+    })
+}
+
+fn import_xyz_v1_with_repository(
+    input: &ImportXyzV1Input,
+    repository: &StorageRepository,
+    request_id: &str,
+) -> CommandResult<ImportXyzV1Output> {
+    let validated = validate_import_xyz_v1_input(input, request_id)?;
+    let parsed_substances =
+        parse_xyz(&validated.file_name, &validated.contents).map_err(|error| {
+            eprintln!(
+                "[ipc] import_parse_failure command={} request_id={} details={}",
+                IMPORT_XYZ_COMMAND_NAME, request_id, error
+            );
+            map_import_xyz_parse_error(request_id, error)
+        })?;
+
+    let existing = repository.list_substances().map_err(|error| {
+        eprintln!(
+            "[ipc] storage_failure command={} request_id={} details={}",
+            IMPORT_XYZ_COMMAND_NAME, request_id, error
+        );
+        map_storage_import_error(request_id, error)
+    })?;
+    let mut seen_keys: std::collections::BTreeSet<(String, String)> = existing
+        .iter()
+        .map(|substance| import_duplicate_key(&substance.name, &substance.formula))
+        .collect();
+
+    let mut batched_inserts = Vec::with_capacity(parsed_substances.len());
+    let mut imported_substances = Vec::with_capacity(parsed_substances.len());
+    let mut inference_summaries = Vec::with_capacity(parsed_substances.len());
+    for (index, parsed) in parsed_substances.into_iter().enumerate() {
+        let duplicate_key = import_duplicate_key(&parsed.name, &parsed.formula);
+        if seen_keys.contains(&duplicate_key) {
+            return Err(CommandError::import(
+                CONTRACT_VERSION_V1,
+                request_id,
+                "IMPORT_DUPLICATE_SUBSTANCE",
+                format!(
+                    "Duplicate substance in `{}` at record {} (name=`{}`, formula=`{}`).",
+                    validated.file_name, parsed.record_index, parsed.name, parsed.formula
+                ),
+            ));
+        }
+        seen_keys.insert(duplicate_key);
+
+        let import_id = next_imported_substance_id(request_id, index + 1);
+        batched_inserts.push(NewSubstance {
+            id: import_id.clone(),
+            name: parsed.name.clone(),
+            formula: parsed.formula.clone(),
+            smiles: None,
+            molar_mass_g_mol: parsed.molar_mass_g_mol,
+            phase_default: "solid".to_string(),
+            source_type: "imported".to_string(),
+        });
+        imported_substances.push(SubstanceCatalogItemV1 {
+            id: import_id,
+            name: parsed.name,
+            formula: parsed.formula,
+            smiles: None,
+            molar_mass_g_mol: parsed.molar_mass_g_mol,
+            phase: "solid".to_string(),
+            source: "imported".to_string(),
+        });
+        inference_summaries.push(ImportXyzInferenceSummaryV1 {
+            record_index: parsed.inference_summary.record_index,
+            inferred_bond_count: parsed.inference_summary.inferred_bond_count,
+            avg_confidence: parsed.inference_summary.avg_confidence,
+            min_confidence: parsed.inference_summary.min_confidence,
+        });
+    }
+
+    repository
+        .create_substances_batch(&batched_inserts)
+        .map_err(|error| {
+            eprintln!(
+                "[ipc] storage_failure command={} request_id={} details={}",
+                IMPORT_XYZ_COMMAND_NAME, request_id, error
+            );
+            map_storage_import_error(request_id, error)
+        })?;
+
+    Ok(ImportXyzV1Output {
+        version: CONTRACT_VERSION_V1,
+        request_id: request_id.to_string(),
+        imported_count: imported_substances.len(),
+        substances: imported_substances,
+        inference_summaries,
     })
 }
 
@@ -2404,6 +2566,27 @@ pub fn import_smiles_v1(
 }
 
 #[tauri::command]
+pub fn import_xyz_v1(
+    input: ImportXyzV1Input,
+    repository: State<'_, StorageRepository>,
+) -> CommandResult<ImportXyzV1Output> {
+    let request_id = logging::next_request_id();
+    logging::log_command_start(IMPORT_XYZ_COMMAND_NAME, &request_id);
+
+    let result = import_xyz_v1_with_repository(&input, &repository, &request_id);
+    match result {
+        Ok(output) => {
+            logging::log_command_success(IMPORT_XYZ_COMMAND_NAME, &request_id);
+            Ok(output)
+        }
+        Err(error) => {
+            logging::log_command_failure(IMPORT_XYZ_COMMAND_NAME, &error);
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
 pub fn save_scenario_draft_v1(
     input: SaveScenarioDraftV1Input,
     repository: State<'_, StorageRepository>,
@@ -2699,6 +2882,29 @@ O
     fn sample_invalid_unknown_element_smiles() -> String {
         "CC Ethane
 Qq Unknownium
+"
+        .to_string()
+    }
+
+    fn sample_valid_xyz() -> String {
+        "3
+Water
+O 0.0000 0.0000 0.0000
+H 0.7570 0.5860 0.0000
+H -0.7570 0.5860 0.0000
+2
+Hydrogen
+H 0.0000 0.0000 0.0000
+H 0.7400 0.0000 0.0000
+"
+        .to_string()
+    }
+
+    fn sample_invalid_xyz() -> String {
+        "2
+Broken
+C 0.0000 0.0000
+H 0.0000 0.0000 1.0000
 "
         .to_string()
     }
@@ -4205,5 +4411,89 @@ Qq Unknownium
             .list_substances()
             .expect("must list rows after parse failure");
         assert!(stored.is_empty());
+    }
+
+    #[test]
+    fn import_xyz_v1_imports_records_with_inference_summary() {
+        let (_temp_dir, repository) = setup_repository("import-xyz-success.sqlite3");
+        let request_id = "req-import-xyz-success";
+        let input = ImportXyzV1Input {
+            file_name: Some("bundle.xyz".to_string()),
+            contents: Some(sample_valid_xyz()),
+        };
+
+        let result = import_xyz_v1_with_repository(&input, &repository, request_id)
+            .expect("valid XYZ should import");
+
+        assert_eq!(result.version, CONTRACT_VERSION_V1);
+        assert_eq!(result.request_id, request_id);
+        assert_eq!(result.imported_count, 2);
+        assert_eq!(result.substances.len(), 2);
+        assert_eq!(result.inference_summaries.len(), 2);
+        assert_eq!(result.substances[0].source, "imported");
+        assert_eq!(result.substances[1].source, "imported");
+        assert_eq!(result.inference_summaries[0].record_index, 1);
+        assert!(result.inference_summaries[0].inferred_bond_count > 0);
+        assert!((0.0..=1.0).contains(&result.inference_summaries[0].avg_confidence));
+        assert!((0.0..=1.0).contains(&result.inference_summaries[0].min_confidence));
+
+        let stored = repository
+            .list_substances()
+            .expect("must list imported xyz rows");
+        assert_eq!(stored.len(), 2);
+        assert!(stored
+            .iter()
+            .all(|substance| substance.source_type == "imported"));
+    }
+
+    #[test]
+    fn import_xyz_v1_returns_contextual_parse_error() {
+        let (_temp_dir, repository) = setup_repository("import-xyz-invalid.sqlite3");
+        let request_id = "req-import-xyz-invalid";
+        let input = ImportXyzV1Input {
+            file_name: Some("broken.xyz".to_string()),
+            contents: Some(sample_invalid_xyz()),
+        };
+
+        let error = import_xyz_v1_with_repository(&input, &repository, request_id)
+            .expect_err("invalid XYZ should fail import");
+        assert_eq!(error.category, ErrorCategory::Import);
+        assert_eq!(error.code, "IMPORT_XYZ_ATOM_LINE_INVALID");
+        assert!(error.message.contains("file=broken.xyz"));
+        assert!(error.message.contains("record=1"));
+        assert!(error.message.contains("line=3"));
+    }
+
+    #[test]
+    fn import_xyz_v1_rolls_back_batch_when_second_insert_fails() {
+        let (_temp_dir, repository) = setup_repository("import-xyz-rollback.sqlite3");
+        let request_id = "req-import-xyz-rollback";
+        repository
+            .create_substance(&NewSubstance {
+                id: format!("imported-substance-{request_id}-2"),
+                name: "Preexisting".to_string(),
+                formula: "Pz".to_string(),
+                smiles: None,
+                molar_mass_g_mol: 10.0,
+                phase_default: "solid".to_string(),
+                source_type: "imported".to_string(),
+            })
+            .expect("must create preexisting conflicting id row");
+
+        let input = ImportXyzV1Input {
+            file_name: Some("bundle.xyz".to_string()),
+            contents: Some(sample_valid_xyz()),
+        };
+
+        let error = import_xyz_v1_with_repository(&input, &repository, request_id)
+            .expect_err("second insert should fail on primary key conflict");
+        assert_eq!(error.category, ErrorCategory::Internal);
+        assert_eq!(error.code, "IMPORT_FAILED");
+
+        let stored = repository
+            .list_substances()
+            .expect("must list rows after failed import");
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].id, format!("imported-substance-{request_id}-2"));
     }
 }

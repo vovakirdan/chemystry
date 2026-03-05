@@ -13,6 +13,7 @@ export const IPC_COMMANDS_V1 = {
   deleteSubstance: "delete_substance_v1",
   importSdfMol: "import_sdf_mol_v1",
   importSmiles: "import_smiles_v1",
+  importXyz: "import_xyz_v1",
   listScenarios: "list_saved_scenarios_v1",
   saveScenario: "save_scenario_draft_v1",
   loadScenario: "load_scenario_draft_v1",
@@ -128,6 +129,24 @@ export interface ImportSmilesV1Input {
 export interface ImportSmilesV1Output extends RequestScopedPayloadV1 {
   importedCount: number;
   substances: ReadonlyArray<SubstanceCatalogEntryV1>;
+}
+
+export interface ImportXyzV1Input {
+  fileName: string;
+  contents: string;
+}
+
+export interface ImportXyzInferenceSummaryV1 {
+  recordIndex: number;
+  inferredBondCount: number;
+  avgConfidence: number;
+  minConfidence: number;
+}
+
+export interface ImportXyzV1Output extends RequestScopedPayloadV1 {
+  importedCount: number;
+  substances: ReadonlyArray<SubstanceCatalogEntryV1>;
+  inferenceSummaries: ReadonlyArray<ImportXyzInferenceSummaryV1>;
 }
 
 export const BUILDER_PARTICIPANT_ROLES_V1 = ["reactant", "product"] as const;
