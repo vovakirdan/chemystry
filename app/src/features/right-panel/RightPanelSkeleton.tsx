@@ -4,12 +4,23 @@ import {
   formatStoichiometryValue,
   type StoichiometryCalculationResult,
 } from "../../shared/lib/stoichiometry";
-import type { CalculationResultTypeV1, CalculationSummaryV1 } from "../../shared/contracts/ipc/v1";
+import type {
+  CalculationResultTypeV1,
+  CalculationSummaryV1,
+  GasMediumV1,
+} from "../../shared/contracts/ipc/v1";
 
 export type RightPanelFeatureStatus = {
   id: string;
   label: string;
   availability: string;
+};
+
+export type ScenarioHistoryEntry = {
+  id: string;
+  timestampLabel: string;
+  category: "environment";
+  message: string;
 };
 
 type RightPanelSkeletonProps = {
@@ -21,6 +32,7 @@ type RightPanelSkeletonProps = {
   calculationSummary?: CalculationSummaryV1 | null;
   calculationSummaryIsStale?: boolean;
   onExportCalculationSummary?: () => void;
+  scenarioHistory?: ReadonlyArray<ScenarioHistoryEntry>;
 };
 
 type RightPanelSectionDefinition = {
@@ -57,12 +69,23 @@ type PrecisionProfile = (typeof PRECISION_PROFILE_OPTIONS)[number];
 const DEFAULT_PRECISION_PROFILE: PrecisionProfile = "Balanced";
 const DEFAULT_TEMPERATURE_C = 25;
 const DEFAULT_PRESSURE_ATM = 1;
+const DEFAULT_GAS_MEDIUM: GasMediumV1 = "gas";
 const DEFAULT_CALCULATION_PASSES = 250;
 const DEFAULT_FPS_LIMIT = 60;
+const MIN_TEMPERATURE_C = -273.14;
+const MAX_TEMPERATURE_C = 1000;
+const MIN_PRESSURE_ATM = 0.1;
+const MAX_PRESSURE_ATM = 50;
+const GAS_MEDIUM_OPTIONS: ReadonlyArray<{ value: GasMediumV1; label: string }> = [
+  { value: "gas", label: "Gas" },
+  { value: "liquid", label: "Liquid aerosol" },
+  { value: "vacuum", label: "Vacuum" },
+];
 
 export type RightPanelRuntimeSettings = {
   temperatureC: number | null;
   pressureAtm: number | null;
+  gasMedium: GasMediumV1;
   calculationPasses: number | null;
   precisionProfile: PrecisionProfile;
   fpsLimit: number | null;
@@ -114,6 +137,7 @@ function RightPanelSkeleton({
   calculationSummary,
   calculationSummaryIsStale = false,
   onExportCalculationSummary,
+  scenarioHistory = [],
 }: RightPanelSkeletonProps) {
   const [activeSection, setActiveSection] = useState<RightPanelSectionId>(
     DEFAULT_RIGHT_PANEL_SECTION,
@@ -130,6 +154,9 @@ function RightPanelSkeleton({
       runtimeSettings === undefined ? DEFAULT_PRESSURE_ATM : runtimeSettings.pressureAtm,
       DEFAULT_PRESSURE_ATM,
     ),
+  );
+  const [gasMedium, setGasMedium] = useState<GasMediumV1>(
+    runtimeSettings?.gasMedium ?? DEFAULT_GAS_MEDIUM,
   );
   const [calculationPassesInput, setCalculationPassesInput] = useState(
     formatRuntimeNumberInput(
@@ -160,6 +187,28 @@ function RightPanelSkeleton({
     [calculationPassesInput],
   );
   const parsedFpsLimit = useMemo(() => parseNumberInput(fpsLimitInput), [fpsLimitInput]);
+  const temperatureValidationMessage = useMemo(() => {
+    if (parsedTemperatureC === null) {
+      return "Temperature is required.";
+    }
+
+    if (parsedTemperatureC < MIN_TEMPERATURE_C || parsedTemperatureC > MAX_TEMPERATURE_C) {
+      return `Temperature must stay between ${MIN_TEMPERATURE_C}°C and ${MAX_TEMPERATURE_C}°C.`;
+    }
+
+    return null;
+  }, [parsedTemperatureC]);
+  const pressureValidationMessage = useMemo(() => {
+    if (parsedPressureAtm === null) {
+      return "Pressure is required.";
+    }
+
+    if (parsedPressureAtm < MIN_PRESSURE_ATM || parsedPressureAtm > MAX_PRESSURE_ATM) {
+      return `Pressure must stay between ${MIN_PRESSURE_ATM} atm and ${MAX_PRESSURE_ATM} atm.`;
+    }
+
+    return null;
+  }, [parsedPressureAtm]);
   const stoichiometrySummaryEntry = useMemo(
     () => getCalculationSummaryEntry(calculationSummary, "stoichiometry"),
     [calculationSummary],
@@ -185,11 +234,13 @@ function RightPanelSkeleton({
     onRuntimeSettingsChange?.({
       temperatureC: parsedTemperatureC,
       pressureAtm: parsedPressureAtm,
+      gasMedium,
       calculationPasses: parsedCalculationPasses,
       precisionProfile,
       fpsLimit: parsedFpsLimit,
     });
   }, [
+    gasMedium,
     onRuntimeSettingsChange,
     parsedCalculationPasses,
     parsedFpsLimit,
@@ -266,6 +317,8 @@ function RightPanelSkeleton({
                   id="right-panel-environment-temperature-input"
                   type="number"
                   step={0.1}
+                  min={MIN_TEMPERATURE_C}
+                  max={MAX_TEMPERATURE_C}
                   aria-label="Environment temperature in Celsius"
                   data-testid="right-panel-environment-temperature"
                   value={temperatureCInput}
@@ -275,12 +328,22 @@ function RightPanelSkeleton({
                   Temperature: {parsedTemperatureC === null ? "not set" : parsedTemperatureC}
                   &deg;C
                 </p>
+                {temperatureValidationMessage !== null ? (
+                  <p
+                    className="status-line"
+                    data-testid="right-panel-environment-temperature-validation"
+                  >
+                    {temperatureValidationMessage}
+                  </p>
+                ) : null}
 
                 <label htmlFor="right-panel-environment-pressure-input">Pressure (atm)</label>
                 <input
                   id="right-panel-environment-pressure-input"
                   type="number"
                   step={0.01}
+                  min={MIN_PRESSURE_ATM}
+                  max={MAX_PRESSURE_ATM}
                   aria-label="Environment pressure in atmospheres"
                   data-testid="right-panel-environment-pressure"
                   value={pressureAtmInput}
@@ -288,6 +351,37 @@ function RightPanelSkeleton({
                 />
                 <p className="status-line" data-testid="right-panel-environment-pressure-value">
                   Pressure: {parsedPressureAtm === null ? "not set" : parsedPressureAtm} atm
+                </p>
+                {pressureValidationMessage !== null ? (
+                  <p
+                    className="status-line"
+                    data-testid="right-panel-environment-pressure-validation"
+                  >
+                    {pressureValidationMessage}
+                  </p>
+                ) : null}
+
+                <label htmlFor="right-panel-environment-gas-medium-select">Gas medium model</label>
+                <select
+                  id="right-panel-environment-gas-medium-select"
+                  aria-label="Environment gas medium"
+                  data-testid="right-panel-environment-gas-medium"
+                  value={gasMedium}
+                  onChange={(event) => {
+                    const nextMedium = event.currentTarget.value as GasMediumV1;
+                    if (GAS_MEDIUM_OPTIONS.some((option) => option.value === nextMedium)) {
+                      setGasMedium(nextMedium);
+                    }
+                  }}
+                >
+                  {GAS_MEDIUM_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="status-line" data-testid="right-panel-environment-gas-medium-value">
+                  Gas medium: {gasMedium}
                 </p>
 
                 <label className="right-panel-toggle" htmlFor="right-panel-environment-fog-toggle">
@@ -393,6 +487,26 @@ function RightPanelSkeleton({
                     </li>
                   ))}
                 </ul>
+                <section
+                  className="right-panel-summary-block"
+                  aria-label="Scenario history"
+                  data-testid="right-panel-summary-history"
+                >
+                  <h4 className="panel-subtitle">Scenario history</h4>
+                  {scenarioHistory.length === 0 ? (
+                    <p className="status-line" data-testid="right-panel-summary-history-empty">
+                      No environment changes logged yet.
+                    </p>
+                  ) : (
+                    <ul className="status-list" data-testid="right-panel-summary-history-list">
+                      {scenarioHistory.map((entry) => (
+                        <li key={entry.id}>
+                          [{entry.timestampLabel}] {entry.message}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
 
                 {stoichiometryResult === undefined ? null : (
                   <section

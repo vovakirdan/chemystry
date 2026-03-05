@@ -14,6 +14,7 @@ import type { SubstanceCatalogEntryV1 } from "./shared/contracts/ipc/v1";
 const VALID_RUNTIME_SETTINGS: RightPanelRuntimeSettings = {
   temperatureC: 25,
   pressureAtm: 1,
+  gasMedium: "gas",
   calculationPasses: 250,
   precisionProfile: "Balanced",
   fpsLimit: 60,

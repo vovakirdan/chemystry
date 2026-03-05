@@ -8,6 +8,7 @@ import {
 import {
   CALCULATION_RESULT_TYPES_V1,
   BUILDER_PARTICIPANT_ROLES_V1,
+  GAS_MEDIA_V1,
   type CalculationResultTypeV1,
   type CalculationSummaryV1,
   type CreateSubstanceV1Input,
@@ -33,6 +34,7 @@ import {
   type BuilderParticipantRoleV1,
   type CommandErrorCategoryV1,
   type CommandErrorV1,
+  type GasMediumV1,
   type GetFeatureFlagsV1Output,
   type GreetV1Input,
   type GreetV1Output,
@@ -90,6 +92,7 @@ const REACTION_CLASS_SET_V1: ReadonlySet<ReactionClassV1> = new Set(REACTION_CLA
 const BUILDER_PARTICIPANT_ROLE_SET_V1: ReadonlySet<BuilderParticipantRoleV1> = new Set(
   BUILDER_PARTICIPANT_ROLES_V1,
 );
+const GAS_MEDIUM_SET_V1: ReadonlySet<GasMediumV1> = new Set(GAS_MEDIA_V1);
 const PRECISION_PROFILE_SET_V1: ReadonlySet<PrecisionProfileV1> = new Set(PRECISION_PROFILES_V1);
 const CALCULATION_RESULT_TYPE_SET_V1: ReadonlySet<CalculationResultTypeV1> = new Set(
   CALCULATION_RESULT_TYPES_V1,
@@ -233,6 +236,14 @@ function parsePrecisionProfileV1(value: unknown): PrecisionProfileV1 | null {
   return PRECISION_PROFILE_SET_V1.has(value as PrecisionProfileV1)
     ? (value as PrecisionProfileV1)
     : null;
+}
+
+function parseGasMediumV1(value: unknown): GasMediumV1 | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  return GAS_MEDIUM_SET_V1.has(value as GasMediumV1) ? (value as GasMediumV1) : null;
 }
 
 function parsePresetEntryV1(
@@ -621,6 +632,15 @@ function parseScenarioRuntimeSettingsV1(
     "calculationPasses",
     requestId,
   );
+  const rawGasMedium = readFirstDefined(candidate, ["gasMedium", "gas_medium"]);
+  const gasMedium = parseGasMediumV1(rawGasMedium);
+  const resolvedGasMedium = gasMedium ?? "gas";
+  if (gasMedium === null && rawGasMedium !== undefined && rawGasMedium !== null) {
+    throw createInvalidScenarioPayloadError(
+      "Scenario runtime settings have an unsupported gasMedium.",
+      requestId,
+    );
+  }
   const fpsLimit = parseScenarioNullableNumber(
     readFirstDefined(candidate, ["fpsLimit", "fps_limit"]),
     "fpsLimit",
@@ -646,6 +666,7 @@ function parseScenarioRuntimeSettingsV1(
   return {
     temperatureC,
     pressureAtm,
+    gasMedium: resolvedGasMedium,
     calculationPasses,
     precisionProfile: resolvedPrecisionProfile,
     fpsLimit,

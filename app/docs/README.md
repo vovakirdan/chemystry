@@ -28,6 +28,7 @@
 - Molecule render, selection, and HUD (E09-T03): `3d-molecule-render-and-selection-e09-t03.md`
 - Simulation loop and time-step manager (E10-T01): `simulation-loop-e10-t01.md`
 - Base particle model and interactions (E10-T02): `particle-model-e10-t02.md`
+- Environment controls and scenario history logging (E11-T01): `environment-controls-e11-t01.md`
 - Schema dump (E04-T02): `schema-dump-e04-t02.sql`
 - Schema dump (E04-T03): `schema-dump-e04-t03.sql`
 - Storage JSON fields (E04-T03): `storage-json-fields-e04-t03.md`

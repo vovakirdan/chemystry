@@ -61,6 +61,7 @@ const SAMPLE_SCENARIO_PAYLOAD = {
   runtimeSettings: {
     temperatureC: 25,
     pressureAtm: 1,
+    gasMedium: "gas" as const,
     calculationPasses: 250,
     precisionProfile: "Balanced" as const,
     fpsLimit: 60,
@@ -522,6 +523,27 @@ describe("ipc v1 client", () => {
     await expect(loadScenarioV1({ id: "scenario-run-saved" })).rejects.toMatchObject({
       version: IPC_CONTRACT_VERSION_V1,
       requestId: "req-load-scenario-invalid",
+      category: "internal",
+      code: "INVALID_SCENARIO_PAYLOAD",
+    });
+  });
+
+  it("rejects load_scenario_v1 payloads with invalid gas medium", async () => {
+    invokeMock.mockResolvedValueOnce({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-load-scenario-invalid-gas-medium",
+      scenarioId: "scenario-run-saved",
+      scenarioName: "Hydrogen what-if",
+      builder: SAMPLE_SCENARIO_PAYLOAD.builderDraft,
+      runtime: {
+        ...SAMPLE_SCENARIO_PAYLOAD.runtimeSettings,
+        gasMedium: "plasma",
+      },
+    });
+
+    await expect(loadScenarioV1({ id: "scenario-run-saved" })).rejects.toMatchObject({
+      version: IPC_CONTRACT_VERSION_V1,
+      requestId: "req-load-scenario-invalid-gas-medium",
       category: "internal",
       code: "INVALID_SCENARIO_PAYLOAD",
     });

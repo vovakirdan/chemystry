@@ -17,6 +17,7 @@ describe("RightPanelSkeleton runtime settings hydration", () => {
         runtimeSettings={{
           temperatureC: null,
           pressureAtm: 1,
+          gasMedium: "vacuum",
           calculationPasses: null,
           precisionProfile: "Custom",
           fpsLimit: null,
@@ -26,10 +27,34 @@ describe("RightPanelSkeleton runtime settings hydration", () => {
 
     expect(html).toContain('data-testid="right-panel-environment-temperature" value=""');
     expect(html).toContain('data-testid="right-panel-environment-pressure" value="1"');
+    expect(html).toContain('data-testid="right-panel-environment-gas-medium"');
+    expect(html).toContain("Gas medium: vacuum");
     expect(html).toContain('data-testid="right-panel-calculations-input" value=""');
     expect(html).toContain('data-testid="right-panel-calculations-fps" value=""');
     expect(html).toContain('data-testid="right-panel-calculations-precision-value"');
     expect(html).toContain("Precision profile: Custom");
+  });
+
+  it("shows explicit environment range validation messages for out-of-range values", () => {
+    const html = renderToStaticMarkup(
+      <RightPanelSkeleton
+        healthMessage="ok"
+        featureStatuses={[]}
+        runtimeSettings={{
+          temperatureC: -500,
+          pressureAtm: 80,
+          gasMedium: "gas",
+          calculationPasses: 250,
+          precisionProfile: "Balanced",
+          fpsLimit: 60,
+        }}
+      />,
+    );
+
+    expect(html).toContain('data-testid="right-panel-environment-temperature-validation"');
+    expect(html).toContain("Temperature must stay between -273.14");
+    expect(html).toContain('data-testid="right-panel-environment-pressure-validation"');
+    expect(html).toContain("Pressure must stay between 0.1 atm and 50 atm.");
   });
 });
 
@@ -190,6 +215,27 @@ describe("RightPanelSkeleton stoichiometry summary", () => {
     expect(html).toContain('data-testid="right-panel-summary-stoichiometry-gas"');
     expect(html).toContain("consistency check inputs.");
     expect(html).toContain("Units: amounts and reaction extent in");
+  });
+
+  it("renders scenario history entries in summary section", () => {
+    const html = renderToStaticMarkup(
+      <RightPanelSkeleton
+        healthMessage="ok"
+        featureStatuses={[]}
+        scenarioHistory={[
+          {
+            id: "history-1",
+            timestampLabel: "12:34:56",
+            category: "environment",
+            message: "Environment temperature set to 120 °C.",
+          },
+        ]}
+      />,
+    );
+
+    expect(html).toContain('data-testid="right-panel-summary-history"');
+    expect(html).toContain('data-testid="right-panel-summary-history-list"');
+    expect(html).toContain("[12:34:56] Environment temperature set to 120 °C.");
   });
 
   it("renders stale summary status when inputs changed after previous save/export", () => {

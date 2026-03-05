@@ -113,6 +113,9 @@ export type BuilderParticipantRoleV1 = (typeof BUILDER_PARTICIPANT_ROLES_V1)[num
 export const PRECISION_PROFILES_V1 = ["Balanced", "High Precision", "Custom"] as const;
 export type PrecisionProfileV1 = (typeof PRECISION_PROFILES_V1)[number];
 
+export const GAS_MEDIA_V1 = ["gas", "liquid", "vacuum"] as const;
+export type GasMediumV1 = (typeof GAS_MEDIA_V1)[number];
+
 export interface ScenarioParticipantSnapshotV1 {
   id: string;
   substanceId: string;
@@ -135,6 +138,7 @@ export interface ScenarioBuilderSnapshotV1 {
 export interface ScenarioRuntimeSettingsV1 {
   temperatureC: number | null;
   pressureAtm: number | null;
+  gasMedium: GasMediumV1;
   calculationPasses: number | null;
   precisionProfile: PrecisionProfileV1;
   fpsLimit: number | null;

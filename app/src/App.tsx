@@ -36,6 +36,7 @@ import {
 } from "./features/left-panel/model";
 import RightPanelSkeleton, {
   type RightPanelFeatureStatus,
+  type ScenarioHistoryEntry,
   type RightPanelRuntimeSettings,
 } from "./features/right-panel/RightPanelSkeleton";
 import NotificationCenter from "./shared/components/NotificationCenter";
@@ -79,6 +80,7 @@ import {
   type StoichiometryCalculationResult,
 } from "./shared/lib/stoichiometry";
 import { parseNormalizedNumberInput } from "./shared/lib/units";
+import type { ParticleModelEnvironment } from "./features/simulation/particleModel";
 import "./App.css";
 
 const FEATURE_LABEL_BY_KEY: Record<FeatureFlagKey, string> = {
@@ -115,6 +117,7 @@ const RESET_CENTER_PANEL_STATE: Readonly<CenterPanelControlState> = {
 const DEFAULT_RUNTIME_SETTINGS: Readonly<RightPanelRuntimeSettings> = {
   temperatureC: 25,
   pressureAtm: 1,
+  gasMedium: "gas",
   calculationPasses: 250,
   precisionProfile: "Balanced",
   fpsLimit: 60,
@@ -131,6 +134,7 @@ const MIN_FPS_LIMIT = 15;
 const MAX_FPS_LIMIT = 240;
 const HIGH_PRECISION_MAX_FPS = 120;
 const CUSTOM_PRECISION_MIN_PASSES = 50;
+const MAX_SCENARIO_HISTORY_ENTRIES = 100;
 const IDEAL_GAS_CONSTANT_L_ATM_PER_MOL_K = 0.082057338;
 const CELSIUS_TO_KELVIN_OFFSET = 273.15;
 const CALCULATION_SUMMARY_VERSION = 1;
@@ -614,6 +618,25 @@ function resolveRuntimeGasMolarVolumeLPerMol(settings: RightPanelRuntimeSettings
   return (IDEAL_GAS_CONSTANT_L_ATM_PER_MOL_K * temperatureK) / settings.pressureAtm;
 }
 
+function deriveParticleModelEnvironment(
+  settings: RightPanelRuntimeSettings,
+): ParticleModelEnvironment {
+  const temperatureK =
+    settings.temperatureC === null || !Number.isFinite(settings.temperatureC)
+      ? 298.15
+      : Math.max(0.01, settings.temperatureC + CELSIUS_TO_KELVIN_OFFSET);
+  const pressureAtm =
+    settings.pressureAtm === null || !Number.isFinite(settings.pressureAtm)
+      ? 1
+      : Math.max(0.0001, settings.pressureAtm);
+
+  return {
+    temperatureK,
+    pressureAtm,
+    medium: settings.gasMedium,
+  };
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export function buildLaunchValidationModel(
   builderDraft: BuilderDraft | null,
@@ -996,6 +1019,7 @@ export function createCalculationInputSignature(
     runtimeSettings: {
       temperatureC: runtimeSettings.temperatureC,
       pressureAtm: runtimeSettings.pressureAtm,
+      gasMedium: runtimeSettings.gasMedium,
       calculationPasses: runtimeSettings.calculationPasses,
       precisionProfile: runtimeSettings.precisionProfile,
       fpsLimit: runtimeSettings.fpsLimit,
@@ -1096,6 +1120,7 @@ function buildCalculationSummaryEntries(
         runtime: {
           temperatureC: runtimeSettings.temperatureC,
           pressureAtm: runtimeSettings.pressureAtm,
+          gasMedium: runtimeSettings.gasMedium,
         },
         gasParticipants: draft.participants
           .filter((participant) => participant.phase === "gas")
@@ -1197,6 +1222,22 @@ function cloneBuilderDraft(draft: BuilderDraft): BuilderDraft {
   };
 }
 
+function createScenarioHistoryId(): string {
+  return `history-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function appendScenarioHistoryEntry(
+  currentEntries: ReadonlyArray<ScenarioHistoryEntry>,
+  entry: Omit<ScenarioHistoryEntry, "id">,
+): ReadonlyArray<ScenarioHistoryEntry> {
+  const nextEntry: ScenarioHistoryEntry = {
+    ...entry,
+    id: createScenarioHistoryId(),
+  };
+  const nextEntries = [nextEntry, ...currentEntries];
+  return nextEntries.slice(0, MAX_SCENARIO_HISTORY_ENTRIES);
+}
+
 function cloneRuntimeSettings(settings: RightPanelRuntimeSettings): RightPanelRuntimeSettings {
   return {
     ...settings,
@@ -1232,6 +1273,7 @@ function areRuntimeSettingsEqual(
   return (
     left.temperatureC === right.temperatureC &&
     left.pressureAtm === right.pressureAtm &&
+    left.gasMedium === right.gasMedium &&
     left.calculationPasses === right.calculationPasses &&
     left.precisionProfile === right.precisionProfile &&
     left.fpsLimit === right.fpsLimit
@@ -1450,6 +1492,7 @@ function App({ initialBuilderDraft = null }: AppProps) {
   const [savedScenarios, setSavedScenarios] = useState<ReadonlyArray<ScenarioSummaryV1>>([]);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
   const [scenarioNameInput, setScenarioNameInput] = useState("");
+  const [scenarioHistory, setScenarioHistory] = useState<ReadonlyArray<ScenarioHistoryEntry>>([]);
   const [scenarioActionState, setScenarioActionState] = useState<"idle" | "saving" | "loading">(
     "idle",
   );
@@ -1661,8 +1704,52 @@ function App({ initialBuilderDraft = null }: AppProps) {
       return;
     }
 
+    const timestampLabel = new Date().toLocaleTimeString();
+
     if (previousRuntimeSettings.precisionProfile !== runtimeSettings.precisionProfile) {
       enqueueNotification("info", `Precision profile set to ${runtimeSettings.precisionProfile}.`);
+    }
+
+    if (previousRuntimeSettings.temperatureC !== runtimeSettings.temperatureC) {
+      const message =
+        runtimeSettings.temperatureC === null
+          ? "Environment temperature input cleared."
+          : `Environment temperature set to ${runtimeSettings.temperatureC} °C.`;
+      enqueueNotification("info", message);
+      setScenarioHistory((currentHistory) =>
+        appendScenarioHistoryEntry(currentHistory, {
+          timestampLabel,
+          category: "environment",
+          message,
+        }),
+      );
+    }
+
+    if (previousRuntimeSettings.pressureAtm !== runtimeSettings.pressureAtm) {
+      const message =
+        runtimeSettings.pressureAtm === null
+          ? "Environment pressure input cleared."
+          : `Environment pressure set to ${runtimeSettings.pressureAtm} atm.`;
+      enqueueNotification("info", message);
+      setScenarioHistory((currentHistory) =>
+        appendScenarioHistoryEntry(currentHistory, {
+          timestampLabel,
+          category: "environment",
+          message,
+        }),
+      );
+    }
+
+    if (previousRuntimeSettings.gasMedium !== runtimeSettings.gasMedium) {
+      const message = `Environment gas medium set to ${runtimeSettings.gasMedium}.`;
+      enqueueNotification("info", message);
+      setScenarioHistory((currentHistory) =>
+        appendScenarioHistoryEntry(currentHistory, {
+          timestampLabel,
+          category: "environment",
+          message,
+        }),
+      );
     }
 
     if (previousRuntimeSettings.fpsLimit !== runtimeSettings.fpsLimit) {
@@ -1853,6 +1940,10 @@ function App({ initialBuilderDraft = null }: AppProps) {
       };
     });
   }, [allSubstances, builderDraft]);
+  const particleModelEnvironment = useMemo(
+    () => deriveParticleModelEnvironment(runtimeSettings),
+    [runtimeSettings],
+  );
   const calculationInputSignature = useMemo(
     () => createCalculationInputSignature(builderDraft, runtimeSettings, allSubstances),
     [allSubstances, builderDraft, runtimeSettings],
@@ -2102,6 +2193,14 @@ function App({ initialBuilderDraft = null }: AppProps) {
       setBaselineSnapshot(snapshot);
       setLastPersistedCalculationInputSignature(
         result.payload.calculationSummary?.inputSignature ?? null,
+      );
+      setScenarioHistory((currentHistory) =>
+        appendScenarioHistoryEntry(currentHistory, {
+          timestampLabel: new Date().toLocaleTimeString(),
+          category: "environment",
+          message:
+            "Scenario loaded. Environment controls synchronized with saved runtime settings.",
+        }),
       );
       setBuilderCopyFeedbackMessage(null);
       enqueueNotification(
@@ -2546,6 +2645,11 @@ function App({ initialBuilderDraft = null }: AppProps) {
               <p data-testid="simulation-workspace-timeline">
                 Timeline: {simulationControlState.timelinePosition}%
               </p>
+              <p data-testid="simulation-workspace-environment-sync">
+                Engine environment sync: T {particleModelEnvironment.temperatureK.toFixed(2)} K, P{" "}
+                {particleModelEnvironment.pressureAtm.toFixed(3)} atm, medium{" "}
+                {particleModelEnvironment.medium}.
+              </p>
               <p data-testid="simulation-workspace-baseline">
                 {baselineSnapshot === null
                   ? "Baseline snapshot is not set. Reset returns timeline and runtime controls to defaults."
@@ -2598,6 +2702,7 @@ function App({ initialBuilderDraft = null }: AppProps) {
             calculationSummary={calculationSummary}
             calculationSummaryIsStale={calculationSummaryIsStale}
             onExportCalculationSummary={handleExportCalculationSummary}
+            scenarioHistory={scenarioHistory}
           />
         }
       />
