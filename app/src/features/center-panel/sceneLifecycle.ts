@@ -4,6 +4,29 @@ export type SceneRuntime = {
   resetCamera?: () => void;
 };
 
+export type SceneParticipantRole = "reactant" | "product";
+
+export type SceneParticipantVisual = {
+  id: string;
+  label: string;
+  formula: string;
+  role: SceneParticipantRole;
+  phase: string;
+};
+
+export type SceneSelectionKind = "atom" | "bond";
+
+export type SceneSelectionDetails = {
+  id: string;
+  kind: SceneSelectionKind;
+  label: string;
+  formula: string;
+  role: SceneParticipantRole;
+  phase: string;
+  colorHex: string;
+  linkedParticipantLabel: string | null;
+};
+
 export type SceneRuntimeFactory = (container: HTMLElement) => SceneRuntime;
 
 export type AnimationFrameScheduler = {

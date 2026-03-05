@@ -1,5 +1,7 @@
 import { type ReactNode } from "react";
 import SceneViewport from "./SceneViewport";
+import type { SceneParticipantVisual } from "./sceneLifecycle";
+import type { SceneColorScheme } from "./sceneVisualConfig";
 
 type CenterPanelSkeletonProps = {
   children?: ReactNode;
@@ -11,6 +13,9 @@ type CenterPanelSkeletonProps = {
   onSimulationTimelinePositionChange?: (timelinePosition: number) => void;
   playBlocked?: boolean;
   playBlockedReason?: string | null;
+  sceneStateLabel?: string;
+  sceneParticipants?: ReadonlyArray<SceneParticipantVisual>;
+  sceneColorScheme?: Partial<SceneColorScheme>;
 };
 
 const TIMELINE_MIN = 0;
@@ -33,11 +38,17 @@ function CenterPanelSkeleton({
   onSimulationTimelinePositionChange,
   playBlocked = false,
   playBlockedReason = null,
+  sceneStateLabel,
+  sceneParticipants = [],
+  sceneColorScheme,
 }: CenterPanelSkeletonProps) {
   const resolvedControlState = controlState;
   const playDisabled = resolvedControlState.isPlaying || playBlocked;
   const playUnavailableHint =
     playBlockedReason ?? "Play is blocked until pre-run checks are fixed.";
+  const resolvedSceneStateLabel =
+    sceneStateLabel ??
+    (playBlocked ? "Blocked" : resolvedControlState.isPlaying ? "Running" : "Paused");
 
   function handlePlayClick(): void {
     if (playBlocked || resolvedControlState.isPlaying) {
@@ -102,7 +113,12 @@ function CenterPanelSkeleton({
           </p>
         </header>
 
-        <SceneViewport />
+        <SceneViewport
+          participants={sceneParticipants}
+          colorScheme={sceneColorScheme}
+          simulationStateLabel={resolvedSceneStateLabel}
+          timelinePosition={resolvedControlState.timelinePosition}
+        />
       </section>
 
       <section

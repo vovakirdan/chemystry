@@ -4,6 +4,7 @@ import CenterPanelSkeleton, {
   CENTER_TIMELINE_INITIAL,
   type CenterPanelControlState,
 } from "./features/center-panel/CenterPanelSkeleton";
+import type { SceneParticipantVisual } from "./features/center-panel/sceneLifecycle";
 import LeftPanelSkeleton from "./features/left-panel/LeftPanelSkeleton";
 import {
   addBuilderDraftParticipant,
@@ -1833,6 +1834,25 @@ function App({ initialBuilderDraft = null }: AppProps) {
     () => buildLaunchValidationModel(builderDraft, runtimeSettings, allSubstances),
     [allSubstances, builderDraft, runtimeSettings],
   );
+  const sceneParticipants = useMemo<ReadonlyArray<SceneParticipantVisual>>(() => {
+    if (builderDraft === null) {
+      return [];
+    }
+
+    const labelsByParticipantId = createBuilderParticipantLabelLookup(builderDraft, allSubstances);
+
+    return builderDraft.participants.map((participant, index) => {
+      const substance = allSubstances.find((entry) => entry.id === participant.substanceId);
+
+      return {
+        id: participant.id,
+        label: resolveBuilderParticipantLabel(participant.id, index, labelsByParticipantId),
+        formula: substance?.formula ?? "Unknown",
+        role: participant.role,
+        phase: participant.phase,
+      };
+    });
+  }, [allSubstances, builderDraft]);
   const calculationInputSignature = useMemo(
     () => createCalculationInputSignature(builderDraft, runtimeSettings, allSubstances),
     [allSubstances, builderDraft, runtimeSettings],
@@ -2504,6 +2524,8 @@ function App({ initialBuilderDraft = null }: AppProps) {
             onSimulationTimelinePositionChange={handleSimulationTimelinePositionChange}
             playBlocked={isLaunchBlocked}
             playBlockedReason={launchBlockedReason}
+            sceneStateLabel={simulationStateLabel}
+            sceneParticipants={sceneParticipants}
           >
             <header className="center-header">
               <h1>Simulation workspace</h1>

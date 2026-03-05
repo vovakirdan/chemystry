@@ -13,6 +13,10 @@ describe("CenterPanelSkeleton lifecycle sync", () => {
     expect(html).toContain("Grid + XYZ axes");
     expect(html).toContain("Mouse orbit/pan/zoom + keyboard control");
     expect(html).toContain('data-testid="center-render-reset-camera"');
+    expect(html).toContain('data-testid="center-render-hud-state"');
+    expect(html).toContain("State: Running");
+    expect(html).toContain("Timeline: 64%");
+    expect(html).toContain("Participants: 0");
     expect(html).not.toContain("3D scene canvas will render here.");
     expect(html).toContain('data-testid="center-control-play" disabled=""');
     expect(html).toContain('data-testid="center-control-pause"');
@@ -32,6 +36,7 @@ describe("CenterPanelSkeleton lifecycle sync", () => {
     );
 
     expect(blockedHtml).toContain("Playback: blocked");
+    expect(blockedHtml).toContain("State: Blocked");
     expect(blockedHtml).toContain("Play disabled: Fix Builder validation errors.");
     expect(blockedHtml).toContain('data-testid="center-control-blocked-reason"');
   });
