@@ -1,20 +1,27 @@
 # E11-T01: Environment Controls and Scenario History Logging
 
 ## Scope
-- Added environment controls in right panel for:
+- Extended right panel environment controls to support:
   - temperature (C)
   - pressure (atm)
-  - gas medium (`gas` / `liquid` / `vacuum`)
-- Added explicit range validation feedback in the environment section.
-- Extended runtime settings contract with `gasMedium` and added client-side contract validation.
-- Added scenario history entries for environment parameter changes in `App` state.
-- Added engine-sync summary line in workspace panel showing derived environment values used by simulation core.
+  - gas medium (`gas`, `liquid`, `vacuum`)
+- Added explicit range validation messages for environment inputs:
+  - temperature: `-273.14°C .. 1000°C`
+  - pressure: `0.1 .. 50 atm`
+- Extended runtime settings and IPC contract handling with `gasMedium`.
+- Added environment-to-engine synchronization surface in workspace view (`T[K]`, `P[atm]`, medium).
+- Added scenario history logging for environment changes:
+  - temperature updates
+  - pressure updates
+  - gas medium updates
+  - scenario load synchronization marker
 
-## Acceptance Mapping
-1. T/P/medium controls in right panel: implemented in `RightPanelSkeleton` environment section.
-2. Validation of ranges and units: implemented for temperature and pressure with user-facing messages and unit labels.
-3. Sync with simulation engine: runtime settings are converted to `ParticleModelEnvironment` and rendered in workspace sync line.
-4. Explicit logging: environment changes append scenario history entries visible in right-panel summary.
+## Technical Notes
+- `RightPanelRuntimeSettings` now includes `gasMedium`.
+- Scenario load parsing keeps backward compatibility:
+  - missing `gasMedium` falls back to `"gas"`
+  - unsupported values are rejected as invalid scenario payloads
+- Environment change history is capped (`MAX_SCENARIO_HISTORY_ENTRIES`) and shown in Summary tab.
 
 ## Files
 - `src/features/right-panel/RightPanelSkeleton.tsx`
@@ -35,7 +42,7 @@ npm run build
 ```
 
 Manual smoke checks:
-- Environment section shows temperature/pressure/gas medium controls.
-- Out-of-range temperature/pressure shows validation text.
-- Changing temperature/pressure/gas medium updates workspace environment sync line.
-- Summary section shows scenario history entries for environment changes.
+- environment controls are visible in right panel
+- out-of-range values show validation messages
+- gas medium selection updates engine sync line in center panel
+- environment changes appear in Summary -> Scenario history
