@@ -308,8 +308,20 @@ fn validate_smiles_characters(
         if ch.is_ascii_alphanumeric()
             || matches!(
                 ch,
-                '#' | '%' | '(' | ')' | '[' | ']' | '+' | '-' | '.' | ':' | '=' | '@' | '\\'
-                    | '/' | '*'
+                '#' | '%'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '+'
+                    | '-'
+                    | '.'
+                    | ':'
+                    | '='
+                    | '@'
+                    | '\\'
+                    | '/'
+                    | '*'
             )
         {
             continue;
@@ -423,7 +435,13 @@ fn collect_explicit_atoms(
 
             let bracket_content: String = chars[index + 1..end_index].iter().collect();
             let bracket_counts = parse_bracket_atom_counts(&bracket_content).map_err(|error| {
-                record_error(file_name, record_index, line_number, error.code, error.message)
+                record_error(
+                    file_name,
+                    record_index,
+                    line_number,
+                    error.code,
+                    error.message,
+                )
             })?;
 
             for (symbol, count) in bracket_counts {
@@ -609,7 +627,10 @@ fn parse_atom_symbol_at(chars: &[char], index: usize) -> Option<(String, usize)>
     None
 }
 
-fn parse_count_digits(chars: &[char], start_index: usize) -> Result<(usize, usize), BracketParseError> {
+fn parse_count_digits(
+    chars: &[char],
+    start_index: usize,
+) -> Result<(usize, usize), BracketParseError> {
     let mut value = 0usize;
     let mut consumed = 0usize;
 
@@ -648,12 +669,10 @@ fn increment_atom_count(
     count: usize,
 ) -> Result<(), BracketParseError> {
     let entry = atom_counts.entry(symbol.to_string()).or_insert(0);
-    *entry = entry
-        .checked_add(count)
-        .ok_or_else(|| BracketParseError {
-            code: "IMPORT_SMILES_COUNT_TOO_LARGE",
-            message: "Explicit atom count is too large to process safely.".to_string(),
-        })?;
+    *entry = entry.checked_add(count).ok_or_else(|| BracketParseError {
+        code: "IMPORT_SMILES_COUNT_TOO_LARGE",
+        message: "Explicit atom count is too large to process safely.".to_string(),
+    })?;
     Ok(())
 }
 
@@ -830,8 +849,8 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_lowercase_token_for_cq() {
-        let error =
-            parse_smiles("unsupported.smi", "Cq Broken\n").expect_err("unsupported lowercase token");
+        let error = parse_smiles("unsupported.smi", "Cq Broken\n")
+            .expect_err("unsupported lowercase token");
 
         assert_eq!(error.code, "IMPORT_SMILES_UNSUPPORTED_TOKEN");
         assert_eq!(error.file_name, "unsupported.smi");
