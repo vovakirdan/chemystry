@@ -59,6 +59,7 @@ import {
   toUserFacingMessageV1,
   updateSubstanceV1,
 } from "./shared/contracts/ipc/client";
+import { GAS_MEDIA_V1, type GasMediumV1 } from "./shared/contracts/ipc/v1";
 import type {
   CalculationResultTypeV1,
   CalculationSummaryEntryV1,
@@ -104,6 +105,8 @@ const FEATURE_KEYS: ReadonlyArray<FeatureFlagKey> = [
 
 const LEFT_PANEL_ACTIVE_TAB_STORAGE_KEY = "chemystery.leftPanel.activeTab.v1";
 const BUILDER_DRAFT_STORAGE_KEY = "chemystery.builder.draft.v1";
+const SCENARIO_HISTORY_STORAGE_KEY = "chemystery.scenario.history.v1";
+const ENVIRONMENT_REWIND_STACK_STORAGE_KEY = "chemystery.environment.rewind.v1";
 
 const DEFAULT_CENTER_PANEL_STATE: Readonly<CenterPanelControlState> = {
   isPlaying: false,
@@ -206,6 +209,32 @@ type SimulationLifecycleCommandResult = {
   runtimeSettingsChanged: boolean;
   builderDraftChanged: boolean;
 };
+
+type EnvironmentStepSnapshot = {
+  temperatureC: number | null;
+  pressureAtm: number | null;
+  gasMedium: GasMediumV1;
+};
+
+type EnvironmentRewindResult =
+  | {
+      status: "unavailable";
+      nextStack: ReadonlyArray<EnvironmentStepSnapshot>;
+      nextSettings: null;
+      message: string;
+    }
+  | {
+      status: "no_change";
+      nextStack: ReadonlyArray<EnvironmentStepSnapshot>;
+      nextSettings: null;
+      message: string;
+    }
+  | {
+      status: "applied";
+      nextStack: ReadonlyArray<EnvironmentStepSnapshot>;
+      nextSettings: RightPanelRuntimeSettings;
+      message: string;
+    };
 
 type AppProps = {
   initialBuilderDraft?: BuilderDraft | null;
@@ -922,6 +951,173 @@ function persistBuilderDraft(draft: BuilderDraft): boolean {
   }
 }
 
+function isNullableFiniteNumber(value: unknown): value is number | null {
+  return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
+function parseGasMediumFromStorage(value: unknown): GasMediumV1 | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  return GAS_MEDIA_V1.includes(value as GasMediumV1) ? (value as GasMediumV1) : null;
+}
+
+function parseEnvironmentStepSnapshot(candidate: unknown): EnvironmentStepSnapshot | null {
+  if (candidate === null || typeof candidate !== "object") {
+    return null;
+  }
+
+  const record = candidate as Record<string, unknown>;
+  const gasMedium = parseGasMediumFromStorage(record.gasMedium);
+  if (gasMedium === null) {
+    return null;
+  }
+
+  if (!isNullableFiniteNumber(record.temperatureC) || !isNullableFiniteNumber(record.pressureAtm)) {
+    return null;
+  }
+
+  return {
+    temperatureC: record.temperatureC,
+    pressureAtm: record.pressureAtm,
+    gasMedium,
+  };
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function parseScenarioHistoryFromStorageValue(
+  rawValue: string | null,
+): ReadonlyArray<ScenarioHistoryEntry> {
+  if (rawValue === null) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    const entries: ScenarioHistoryEntry[] = [];
+    for (const candidate of parsed) {
+      if (candidate === null || typeof candidate !== "object") {
+        continue;
+      }
+
+      const record = candidate as Record<string, unknown>;
+      if (
+        typeof record.id !== "string" ||
+        typeof record.timestampLabel !== "string" ||
+        record.category !== "environment" ||
+        typeof record.message !== "string"
+      ) {
+        continue;
+      }
+
+      entries.push({
+        id: record.id,
+        timestampLabel: record.timestampLabel,
+        category: "environment",
+        message: record.message,
+      });
+
+      if (entries.length >= MAX_SCENARIO_HISTORY_ENTRIES) {
+        break;
+      }
+    }
+
+    return entries;
+  } catch {
+    return [];
+  }
+}
+
+function readStoredScenarioHistory(): ReadonlyArray<ScenarioHistoryEntry> {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    return parseScenarioHistoryFromStorageValue(
+      window.localStorage.getItem(SCENARIO_HISTORY_STORAGE_KEY),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function persistScenarioHistory(entries: ReadonlyArray<ScenarioHistoryEntry>): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(SCENARIO_HISTORY_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // Ignore localStorage failures to keep the shell interactive.
+  }
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function parseEnvironmentRewindStackFromStorageValue(
+  rawValue: string | null,
+): ReadonlyArray<EnvironmentStepSnapshot> {
+  if (rawValue === null) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    const entries: EnvironmentStepSnapshot[] = [];
+    for (const candidate of parsed) {
+      const snapshot = parseEnvironmentStepSnapshot(candidate);
+      if (snapshot === null) {
+        continue;
+      }
+
+      entries.push(snapshot);
+      if (entries.length >= MAX_SCENARIO_HISTORY_ENTRIES) {
+        break;
+      }
+    }
+
+    return entries;
+  } catch {
+    return [];
+  }
+}
+
+function readStoredEnvironmentRewindStack(): ReadonlyArray<EnvironmentStepSnapshot> {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    return parseEnvironmentRewindStackFromStorageValue(
+      window.localStorage.getItem(ENVIRONMENT_REWIND_STACK_STORAGE_KEY),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function persistEnvironmentRewindStack(entries: ReadonlyArray<EnvironmentStepSnapshot>): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(ENVIRONMENT_REWIND_STACK_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // Ignore localStorage failures to keep the shell interactive.
+  }
+}
+
 function formatCommandError(error: CommandErrorV1): string {
   return `${toUserFacingMessageV1(error)} [${error.code}] (ref: ${error.requestId})`;
 }
@@ -1353,6 +1549,96 @@ function appendScenarioHistoryEntry(
   return nextEntries.slice(0, MAX_SCENARIO_HISTORY_ENTRIES);
 }
 
+function createEnvironmentStepSnapshot(
+  settings: RightPanelRuntimeSettings,
+): EnvironmentStepSnapshot {
+  return {
+    temperatureC: settings.temperatureC,
+    pressureAtm: settings.pressureAtm,
+    gasMedium: settings.gasMedium,
+  };
+}
+
+function areEnvironmentStepSnapshotsEqual(
+  left: EnvironmentStepSnapshot,
+  right: EnvironmentStepSnapshot,
+): boolean {
+  return (
+    left.temperatureC === right.temperatureC &&
+    left.pressureAtm === right.pressureAtm &&
+    left.gasMedium === right.gasMedium
+  );
+}
+
+function appendEnvironmentStepSnapshot(
+  currentEntries: ReadonlyArray<EnvironmentStepSnapshot>,
+  snapshot: EnvironmentStepSnapshot,
+): ReadonlyArray<EnvironmentStepSnapshot> {
+  if (currentEntries.length > 0 && areEnvironmentStepSnapshotsEqual(currentEntries[0], snapshot)) {
+    return currentEntries;
+  }
+
+  return [snapshot, ...currentEntries].slice(0, MAX_SCENARIO_HISTORY_ENTRIES);
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function anchorEnvironmentRewindStack(
+  currentSettings: RightPanelRuntimeSettings,
+  stack: ReadonlyArray<EnvironmentStepSnapshot>,
+): ReadonlyArray<EnvironmentStepSnapshot> {
+  return appendEnvironmentStepSnapshot(stack, createEnvironmentStepSnapshot(currentSettings));
+}
+
+function applyEnvironmentStepSnapshot(
+  currentSettings: RightPanelRuntimeSettings,
+  snapshot: EnvironmentStepSnapshot,
+): RightPanelRuntimeSettings {
+  return {
+    ...currentSettings,
+    temperatureC: snapshot.temperatureC,
+    pressureAtm: snapshot.pressureAtm,
+    gasMedium: snapshot.gasMedium,
+  };
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function rewindEnvironmentStep(
+  currentSettings: RightPanelRuntimeSettings,
+  stack: ReadonlyArray<EnvironmentStepSnapshot>,
+): EnvironmentRewindResult {
+  if (stack.length < 2) {
+    return {
+      status: "unavailable",
+      nextStack: stack,
+      nextSettings: null,
+      message: "No previous environment step is available for rewind.",
+    };
+  }
+
+  const targetSnapshot = stack[1];
+  const nextStack = stack.slice(1);
+  const nextSettings = applyEnvironmentStepSnapshot(currentSettings, targetSnapshot);
+  if (areRuntimeSettingsEqual(currentSettings, nextSettings)) {
+    return {
+      status: "no_change",
+      nextStack,
+      nextSettings: null,
+      message: "Rewind target already matches current environment settings.",
+    };
+  }
+
+  const temperatureLabel =
+    targetSnapshot.temperatureC === null ? "not set" : `${targetSnapshot.temperatureC} °C`;
+  const pressureLabel =
+    targetSnapshot.pressureAtm === null ? "not set" : `${targetSnapshot.pressureAtm} atm`;
+  return {
+    status: "applied",
+    nextStack,
+    nextSettings,
+    message: `Rewind applied. Environment restored to T ${temperatureLabel}, P ${pressureLabel}, medium ${targetSnapshot.gasMedium}.`,
+  };
+}
+
 function cloneRuntimeSettings(settings: RightPanelRuntimeSettings): RightPanelRuntimeSettings {
   return {
     ...settings,
@@ -1607,7 +1893,11 @@ function App({ initialBuilderDraft = null }: AppProps) {
   const [savedScenarios, setSavedScenarios] = useState<ReadonlyArray<ScenarioSummaryV1>>([]);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
   const [scenarioNameInput, setScenarioNameInput] = useState("");
-  const [scenarioHistory, setScenarioHistory] = useState<ReadonlyArray<ScenarioHistoryEntry>>([]);
+  const [scenarioHistory, setScenarioHistory] =
+    useState<ReadonlyArray<ScenarioHistoryEntry>>(readStoredScenarioHistory);
+  const [environmentRewindStack, setEnvironmentRewindStack] = useState<
+    ReadonlyArray<EnvironmentStepSnapshot>
+  >(readStoredEnvironmentRewindStack);
   const [scenarioActionState, setScenarioActionState] = useState<"idle" | "saving" | "loading">(
     "idle",
   );
@@ -1633,6 +1923,8 @@ function App({ initialBuilderDraft = null }: AppProps) {
   const builderDraftHydratedRef = useRef(false);
   const previousSimulationStateRef = useRef<string | null>(null);
   const previousRuntimeSettingsRef = useRef<RightPanelRuntimeSettings | null>(null);
+  const suppressEnvironmentHistoryRef = useRef(false);
+  const environmentStackInitializedRef = useRef(false);
 
   const enqueueNotification = useCallback((level: NotificationLevel, message: string): void => {
     notificationIdRef.current += 1;
@@ -1654,6 +1946,25 @@ function App({ initialBuilderDraft = null }: AppProps) {
   useEffect(() => {
     persistLeftPanelTab(activeLeftPanelTab);
   }, [activeLeftPanelTab]);
+
+  useEffect(() => {
+    persistScenarioHistory(scenarioHistory);
+  }, [scenarioHistory]);
+
+  useEffect(() => {
+    persistEnvironmentRewindStack(environmentRewindStack);
+  }, [environmentRewindStack]);
+
+  useEffect(() => {
+    if (environmentStackInitializedRef.current) {
+      return;
+    }
+
+    environmentStackInitializedRef.current = true;
+    setEnvironmentRewindStack((currentStack) =>
+      anchorEnvironmentRewindStack(runtimeSettings, currentStack),
+    );
+  }, [runtimeSettings]);
 
   useEffect(() => {
     let disposed = false;
@@ -1819,13 +2130,21 @@ function App({ initialBuilderDraft = null }: AppProps) {
       return;
     }
 
+    if (suppressEnvironmentHistoryRef.current) {
+      suppressEnvironmentHistoryRef.current = false;
+      previousRuntimeSettingsRef.current = runtimeSettings;
+      return;
+    }
+
     const timestampLabel = new Date().toLocaleTimeString();
+    let environmentChanged = false;
 
     if (previousRuntimeSettings.precisionProfile !== runtimeSettings.precisionProfile) {
       enqueueNotification("info", `Precision profile set to ${runtimeSettings.precisionProfile}.`);
     }
 
     if (previousRuntimeSettings.temperatureC !== runtimeSettings.temperatureC) {
+      environmentChanged = true;
       const message =
         runtimeSettings.temperatureC === null
           ? "Environment temperature input cleared."
@@ -1841,6 +2160,7 @@ function App({ initialBuilderDraft = null }: AppProps) {
     }
 
     if (previousRuntimeSettings.pressureAtm !== runtimeSettings.pressureAtm) {
+      environmentChanged = true;
       const message =
         runtimeSettings.pressureAtm === null
           ? "Environment pressure input cleared."
@@ -1856,6 +2176,7 @@ function App({ initialBuilderDraft = null }: AppProps) {
     }
 
     if (previousRuntimeSettings.gasMedium !== runtimeSettings.gasMedium) {
+      environmentChanged = true;
       const message = `Environment gas medium set to ${runtimeSettings.gasMedium}.`;
       enqueueNotification("info", message);
       setScenarioHistory((currentHistory) =>
@@ -1878,6 +2199,12 @@ function App({ initialBuilderDraft = null }: AppProps) {
       } else {
         enqueueNotification("info", `FPS limit set to ${runtimeSettings.fpsLimit}.`);
       }
+    }
+
+    if (environmentChanged) {
+      setEnvironmentRewindStack((currentStack) =>
+        appendEnvironmentStepSnapshot(currentStack, createEnvironmentStepSnapshot(runtimeSettings)),
+      );
     }
 
     previousRuntimeSettingsRef.current = runtimeSettings;
@@ -2129,12 +2456,17 @@ function App({ initialBuilderDraft = null }: AppProps) {
 
   const builderEmptyMessage = 'Select a preset and click "Use in Builder" to start editing.';
   const isScenarioBusy = scenarioActionState !== "idle";
+  const anchoredEnvironmentRewindStack = useMemo(
+    () => anchorEnvironmentRewindStack(runtimeSettings, environmentRewindStack),
+    [environmentRewindStack, runtimeSettings],
+  );
   const canSaveScenario =
     builderDraft !== null && scenarioNameInput.trim().length > 0 && !isScenarioBusy;
   const canLoadScenario =
     selectedScenarioId !== null && savedScenarios.length > 0 && !isScenarioBusy;
   const canSetBaselineSnapshot = builderDraft !== null && !isScenarioBusy;
   const canRevertToBaseline = baselineSnapshot !== null && !isScenarioBusy;
+  const canRewindScenarioStep = anchoredEnvironmentRewindStack.length > 1 && !isScenarioBusy;
 
   const handleLibraryPhaseToggle = useCallback((phase: SubstancePhaseV1): void => {
     setSelectedLibraryPhases((currentSelection) => toggleFilterValue(currentSelection, phase));
@@ -2310,6 +2642,12 @@ function App({ initialBuilderDraft = null }: AppProps) {
       setScenarioNameInput(stripGeneratedScenarioNameSuffix(result.scenarioName));
       setSelectedScenarioId(result.scenarioId);
       setBaselineSnapshot(snapshot);
+      setEnvironmentRewindStack((currentStack) =>
+        appendEnvironmentStepSnapshot(
+          currentStack,
+          createEnvironmentStepSnapshot(snapshot.runtimeSettings),
+        ),
+      );
       setLastPersistedCalculationInputSignature(
         result.payload.calculationSummary?.inputSignature ?? null,
       );
@@ -2369,6 +2707,19 @@ function App({ initialBuilderDraft = null }: AppProps) {
     if (result.runtimeSettingsChanged) {
       setRuntimeSettings(result.runtimeSettings);
       setRightPanelSyncRevision((current) => current + 1);
+      setEnvironmentRewindStack((currentStack) =>
+        appendEnvironmentStepSnapshot(
+          currentStack,
+          createEnvironmentStepSnapshot(result.runtimeSettings),
+        ),
+      );
+      setScenarioHistory((currentHistory) =>
+        appendScenarioHistoryEntry(currentHistory, {
+          timestampLabel: new Date().toLocaleTimeString(),
+          category: "environment",
+          message: "Baseline reset applied to environment controls.",
+        }),
+      );
     }
     if (result.builderDraftChanged) {
       setBuilderDraft(result.builderDraft);
@@ -2386,6 +2737,32 @@ function App({ initialBuilderDraft = null }: AppProps) {
     runtimeSettings,
     simulationControlState,
   ]);
+
+  const handleRewindScenarioStep = useCallback((): void => {
+    const rewindResult = rewindEnvironmentStep(runtimeSettings, anchoredEnvironmentRewindStack);
+    if (rewindResult.status === "unavailable") {
+      enqueueNotification("warn", rewindResult.message);
+      return;
+    }
+
+    setEnvironmentRewindStack(rewindResult.nextStack);
+    if (rewindResult.status === "no_change") {
+      enqueueNotification("info", rewindResult.message);
+      return;
+    }
+
+    suppressEnvironmentHistoryRef.current = true;
+    setRuntimeSettings(rewindResult.nextSettings);
+    setRightPanelSyncRevision((current) => current + 1);
+    setScenarioHistory((currentHistory) =>
+      appendScenarioHistoryEntry(currentHistory, {
+        timestampLabel: new Date().toLocaleTimeString(),
+        category: "environment",
+        message: rewindResult.message,
+      }),
+    );
+    enqueueNotification("info", rewindResult.message);
+  }, [anchoredEnvironmentRewindStack, enqueueNotification, runtimeSettings]);
 
   const handleUsePresetInBuilder = useCallback(
     (presetId: string): void => {
@@ -2716,10 +3093,12 @@ function App({ initialBuilderDraft = null }: AppProps) {
               },
               onSetBaselineSnapshot: handleSetBaselineSnapshot,
               onRevertToBaseline: handleRevertToBaseline,
+              onRewindScenarioStep: handleRewindScenarioStep,
               canSaveScenario,
               canLoadScenario,
               canSetBaselineSnapshot,
               canRevertToBaseline,
+              canRewindScenarioStep,
               isScenarioBusy,
               emptyMessage: builderEmptyMessage,
             }}

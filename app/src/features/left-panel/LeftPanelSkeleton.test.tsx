@@ -89,10 +89,12 @@ function createBuilderViewModel(
     onLoadScenario: vi.fn(),
     onSetBaselineSnapshot: vi.fn(),
     onRevertToBaseline: vi.fn(),
+    onRewindScenarioStep: vi.fn(),
     canSaveScenario: false,
     canLoadScenario: false,
     canSetBaselineSnapshot: true,
     canRevertToBaseline: false,
+    canRewindScenarioStep: false,
     isScenarioBusy: false,
     emptyMessage: "Select a preset and use it in Builder.",
     ...overrides,
@@ -394,6 +396,7 @@ describe("LeftPanelSkeleton presets and builder tabs", () => {
             canLoadScenario: true,
             canSetBaselineSnapshot: true,
             canRevertToBaseline: true,
+            canRewindScenarioStep: true,
           }),
         })}
       />,
@@ -407,6 +410,7 @@ describe("LeftPanelSkeleton presets and builder tabs", () => {
     expect(html).toContain('data-testid="builder-scenario-load-button"');
     expect(html).toContain('data-testid="builder-scenario-set-baseline-button"');
     expect(html).toContain('data-testid="builder-scenario-revert-baseline-button"');
+    expect(html).toContain('data-testid="builder-scenario-rewind-button"');
   });
 
   it("renders participant list controls with stable selectors, units, and conversion hint", () => {

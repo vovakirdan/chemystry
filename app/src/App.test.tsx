@@ -1,11 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import App, {
   LaunchValidationCard,
+  anchorEnvironmentRewindStack,
   applySimulationLifecycleCommand,
   buildLaunchValidationModel,
   createCalculationInputSignature,
   isCalculationSummaryStale,
+  parseEnvironmentRewindStackFromStorageValue,
+  parseScenarioHistoryFromStorageValue,
+  rewindEnvironmentStep,
 } from "./App";
 import type { BuilderDraft } from "./features/left-panel/model";
 import type { RightPanelRuntimeSettings } from "./features/right-panel/RightPanelSkeleton";
@@ -20,6 +24,8 @@ const VALID_RUNTIME_SETTINGS: RightPanelRuntimeSettings = {
   fpsLimit: 60,
 };
 const RUNTIME_IDEAL_GAS_MOLAR_VOLUME_L_PER_MOL = "24.4653953247";
+const SCENARIO_HISTORY_STORAGE_KEY = "chemystery.scenario.history.v1";
+const ENVIRONMENT_REWIND_STACK_STORAGE_KEY = "chemystery.environment.rewind.v1";
 
 const SAMPLE_SUBSTANCES: ReadonlyArray<SubstanceCatalogEntryV1> = [
   {
@@ -31,6 +37,45 @@ const SAMPLE_SUBSTANCES: ReadonlyArray<SubstanceCatalogEntryV1> = [
     molarMassGMol: 2.01588,
   },
 ];
+
+function createMemoryStorage(initialEntries: Record<string, string> = {}): Storage {
+  const entries = new Map<string, string>(Object.entries(initialEntries));
+
+  return {
+    get length(): number {
+      return entries.size;
+    },
+    clear(): void {
+      entries.clear();
+    },
+    getItem(key: string): string | null {
+      return entries.has(key) ? (entries.get(key) ?? null) : null;
+    },
+    key(index: number): string | null {
+      return Array.from(entries.keys())[index] ?? null;
+    },
+    removeItem(key: string): void {
+      entries.delete(key);
+    },
+    setItem(key: string, value: string): void {
+      entries.set(key, value);
+    },
+  };
+}
+
+function withMockWindowLocalStorage(
+  initialEntries: Record<string, string>,
+  run: (storage: Storage) => void,
+): void {
+  const storage = createMemoryStorage(initialEntries);
+  vi.stubGlobal("window", { localStorage: storage });
+
+  try {
+    run(storage);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+}
 
 function createBuilderDraftWithRawId(overrides: Partial<BuilderDraft> = {}): BuilderDraft {
   return {
@@ -744,5 +789,193 @@ describe("App simulation lifecycle commands", () => {
     expect(resetAgain.builderDraft).toBe(resetResult.builderDraft);
     expect(resetAgain.runtimeSettingsChanged).toBe(false);
     expect(resetAgain.builderDraftChanged).toBe(false);
+  });
+});
+
+describe("App environment rewind workflow", () => {
+  it("rewinds environment settings while preserving non-environment runtime controls", () => {
+    const currentSettings: RightPanelRuntimeSettings = {
+      ...VALID_RUNTIME_SETTINGS,
+      temperatureC: 180,
+      pressureAtm: 4.5,
+      gasMedium: "vacuum",
+      calculationPasses: 700,
+      precisionProfile: "High Precision",
+      fpsLimit: 144,
+    };
+    const rewindStack = [
+      { temperatureC: 180, pressureAtm: 4.5, gasMedium: "vacuum" as const },
+      { temperatureC: 65, pressureAtm: 2.2, gasMedium: "liquid" as const },
+      { temperatureC: 25, pressureAtm: 1, gasMedium: "gas" as const },
+    ];
+
+    const rewindResult = rewindEnvironmentStep(currentSettings, rewindStack);
+
+    expect(rewindResult.status).toBe("applied");
+    if (rewindResult.status !== "applied") {
+      throw new Error("Expected applied rewind result.");
+    }
+
+    expect(rewindResult.nextStack).toEqual(rewindStack.slice(1));
+    expect(rewindResult.nextSettings).toEqual({
+      ...currentSettings,
+      temperatureC: 65,
+      pressureAtm: 2.2,
+      gasMedium: "liquid",
+    });
+  });
+
+  it("keeps suppressible runtime update unset when rewind target already matches current settings", () => {
+    const currentSettings: RightPanelRuntimeSettings = {
+      ...VALID_RUNTIME_SETTINGS,
+      temperatureC: 25,
+      pressureAtm: 1,
+      gasMedium: "gas",
+      calculationPasses: 600,
+      precisionProfile: "Custom",
+      fpsLimit: 120,
+    };
+    const rewindStack = [
+      { temperatureC: 80, pressureAtm: 2, gasMedium: "vacuum" as const },
+      { temperatureC: 25, pressureAtm: 1, gasMedium: "gas" as const },
+    ];
+
+    const rewindResult = rewindEnvironmentStep(currentSettings, rewindStack);
+
+    expect(rewindResult.status).toBe("no_change");
+    expect(rewindResult.nextSettings).toBeNull();
+    expect(rewindResult.nextStack).toEqual(rewindStack.slice(1));
+  });
+
+  it("anchors cold-start rewind stack to current runtime and rewinds to the previous stored top", () => {
+    const currentSettings: RightPanelRuntimeSettings = {
+      ...VALID_RUNTIME_SETTINGS,
+      temperatureC: 25,
+      pressureAtm: 1,
+      gasMedium: "gas",
+    };
+    const storedStack = [
+      { temperatureC: 80, pressureAtm: 2, gasMedium: "vacuum" as const },
+      { temperatureC: 60, pressureAtm: 1.5, gasMedium: "liquid" as const },
+    ];
+
+    const anchoredStack = anchorEnvironmentRewindStack(currentSettings, storedStack);
+
+    expect(anchoredStack).toEqual([
+      { temperatureC: 25, pressureAtm: 1, gasMedium: "gas" },
+      ...storedStack,
+    ]);
+    expect(anchoredStack.length).toBeGreaterThan(1);
+
+    const rewindResult = rewindEnvironmentStep(currentSettings, anchoredStack);
+
+    expect(rewindResult.status).toBe("applied");
+    if (rewindResult.status !== "applied") {
+      throw new Error("Expected applied rewind result.");
+    }
+
+    expect(rewindResult.nextSettings).toEqual({
+      ...currentSettings,
+      temperatureC: 80,
+      pressureAtm: 2,
+      gasMedium: "vacuum",
+    });
+    expect(rewindResult.nextStack).toEqual(storedStack);
+  });
+
+  it("does not duplicate rewind stack when stored top already matches current runtime", () => {
+    const currentSettings: RightPanelRuntimeSettings = {
+      ...VALID_RUNTIME_SETTINGS,
+      temperatureC: 25,
+      pressureAtm: 1,
+      gasMedium: "gas",
+    };
+    const storedStack = [
+      { temperatureC: 25, pressureAtm: 1, gasMedium: "gas" as const },
+      { temperatureC: 10, pressureAtm: 0.7, gasMedium: "vacuum" as const },
+    ];
+
+    const anchoredStack = anchorEnvironmentRewindStack(currentSettings, storedStack);
+
+    expect(anchoredStack).toBe(storedStack);
+  });
+});
+
+describe("App persistence helpers", () => {
+  it("hydrates scenario history from localStorage at initial render", () => {
+    withMockWindowLocalStorage(
+      {
+        [SCENARIO_HISTORY_STORAGE_KEY]: JSON.stringify([
+          {
+            id: "history-local-1",
+            timestampLabel: "09:15:00",
+            category: "environment",
+            message: "Persisted environment change from local storage.",
+          },
+        ]),
+        [ENVIRONMENT_REWIND_STACK_STORAGE_KEY]: JSON.stringify([
+          {
+            temperatureC: 40,
+            pressureAtm: 1.2,
+            gasMedium: "gas",
+          },
+        ]),
+      },
+      () => {
+        const html = renderToStaticMarkup(<App />);
+        expect(html).toContain("Persisted environment change from local storage.");
+        expect(html).toContain('data-testid="right-panel-summary-history-list"');
+      },
+    );
+  });
+
+  it("filters malformed localStorage payloads for history and rewind stack", () => {
+    withMockWindowLocalStorage({}, (storage) => {
+      storage.setItem(
+        SCENARIO_HISTORY_STORAGE_KEY,
+        JSON.stringify([
+          {
+            id: "history-1",
+            timestampLabel: "10:00:00",
+            category: "environment",
+            message: "Valid history entry.",
+          },
+          { id: "invalid-category", timestampLabel: "10:01:00", category: "other", message: "x" },
+          { id: 123, timestampLabel: "10:02:00", category: "environment", message: "x" },
+        ]),
+      );
+      storage.setItem(
+        ENVIRONMENT_REWIND_STACK_STORAGE_KEY,
+        JSON.stringify([
+          { temperatureC: 90, pressureAtm: 3, gasMedium: "liquid" },
+          { temperatureC: "bad", pressureAtm: 1, gasMedium: "gas" },
+          { temperatureC: 50, pressureAtm: null, gasMedium: "unknown" },
+          null,
+        ]),
+      );
+
+      const parsedHistory = parseScenarioHistoryFromStorageValue(
+        storage.getItem(SCENARIO_HISTORY_STORAGE_KEY),
+      );
+      const parsedRewindStack = parseEnvironmentRewindStackFromStorageValue(
+        storage.getItem(ENVIRONMENT_REWIND_STACK_STORAGE_KEY),
+      );
+
+      expect(parsedHistory).toEqual([
+        {
+          id: "history-1",
+          timestampLabel: "10:00:00",
+          category: "environment",
+          message: "Valid history entry.",
+        },
+      ]);
+      expect(parsedRewindStack).toEqual([
+        {
+          temperatureC: 90,
+          pressureAtm: 3,
+          gasMedium: "liquid",
+        },
+      ]);
+    });
   });
 });

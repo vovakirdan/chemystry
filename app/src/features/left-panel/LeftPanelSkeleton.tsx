@@ -78,10 +78,12 @@ type LeftPanelBuilderViewModel = {
   onLoadScenario: () => void;
   onSetBaselineSnapshot: () => void;
   onRevertToBaseline: () => void;
+  onRewindScenarioStep: () => void;
   canSaveScenario: boolean;
   canLoadScenario: boolean;
   canSetBaselineSnapshot: boolean;
   canRevertToBaseline: boolean;
+  canRewindScenarioStep: boolean;
   isScenarioBusy: boolean;
   emptyMessage: string;
 };
@@ -1045,6 +1047,16 @@ function renderBuilderView(
                 disabled={!builderViewModel.canRevertToBaseline || builderViewModel.isScenarioBusy}
               >
                 Revert to baseline
+              </button>
+              <button
+                type="button"
+                onClick={builderViewModel.onRewindScenarioStep}
+                data-testid="builder-scenario-rewind-button"
+                disabled={
+                  !builderViewModel.canRewindScenarioStep || builderViewModel.isScenarioBusy
+                }
+              >
+                Rewind last step
               </button>
             </div>
           </section>
