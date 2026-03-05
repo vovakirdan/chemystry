@@ -275,6 +275,18 @@ a:focus-visible {
   font-size: 0.7rem;
 }
 
+.center-render-reset-camera {
+  border-color: #587ea3;
+  background: rgba(77, 115, 151, 0.92);
+  font-size: 0.72rem;
+  padding: 0.22rem 0.48rem;
+}
+
+.center-render-reset-camera:hover {
+  border-color: #466c91;
+  background: rgba(70, 108, 145, 1);
+}
+
 .center-control-card {
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);

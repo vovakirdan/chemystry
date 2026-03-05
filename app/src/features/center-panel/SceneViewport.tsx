@@ -1,6 +1,10 @@
 import { useEffect, useRef } from "react";
 import { createThreeSceneRuntime } from "./createThreeSceneRuntime";
-import { mountSceneRuntimeDeferred, type SceneRuntimeFactory } from "./sceneLifecycle";
+import {
+  mountSceneRuntimeDeferred,
+  type SceneRuntime,
+  type SceneRuntimeFactory,
+} from "./sceneLifecycle";
 
 type SceneViewportProps = {
   runtimeFactory?: SceneRuntimeFactory;
@@ -8,6 +12,7 @@ type SceneViewportProps = {
 
 function SceneViewport({ runtimeFactory = createThreeSceneRuntime }: SceneViewportProps) {
   const canvasHostRef = useRef<HTMLDivElement | null>(null);
+  const runtimeRef = useRef<SceneRuntime | null>(null);
 
   useEffect(() => {
     const canvasHost = canvasHostRef.current;
@@ -15,11 +20,24 @@ function SceneViewport({ runtimeFactory = createThreeSceneRuntime }: SceneViewpo
       return undefined;
     }
 
-    return mountSceneRuntimeDeferred({
+    const cleanup = mountSceneRuntimeDeferred({
       container: canvasHost,
-      runtimeFactory,
+      runtimeFactory: (container) => {
+        const runtime = runtimeFactory(container);
+        runtimeRef.current = runtime;
+        return runtime;
+      },
     });
+
+    return () => {
+      cleanup();
+      runtimeRef.current = null;
+    };
   }, [runtimeFactory]);
+
+  function handleResetCameraClick(): void {
+    runtimeRef.current?.resetCamera?.();
+  }
 
   return (
     <div className="center-render-viewport" data-testid="center-render-canvas">
@@ -33,6 +51,15 @@ function SceneViewport({ runtimeFactory = createThreeSceneRuntime }: SceneViewpo
         <span>Ambient + directional lights</span>
         <span>Grid + XYZ axes</span>
         <span>Active frame loop</span>
+        <span>Mouse orbit/pan/zoom + keyboard control</span>
+        <button
+          type="button"
+          className="center-render-reset-camera"
+          data-testid="center-render-reset-camera"
+          onClick={handleResetCameraClick}
+        >
+          Reset camera (R)
+        </button>
       </div>
     </div>
   );

@@ -1,3 +1,4 @@
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import * as THREE from "three";
 import type { SceneRuntime } from "./sceneLifecycle";
 
@@ -9,6 +10,11 @@ const CAMERA_ZOOM_MIN_HEIGHT_PX = 240;
 const GRID_SIZE = 20;
 const GRID_DIVISIONS = 20;
 const AXES_SIZE = 2.5;
+
+const DEFAULT_CAMERA_POSITION = new THREE.Vector3(6, 5, 8);
+const DEFAULT_CAMERA_TARGET = new THREE.Vector3(0, 0, 0);
+
+const KEYBOARD_ZOOM_FACTOR = 1.1;
 
 function isBufferGeometry(value: unknown): value is THREE.BufferGeometry {
   return value instanceof THREE.BufferGeometry;
@@ -47,14 +53,18 @@ function resolveViewportSize(container: HTMLElement): { width: number; height: n
   return { width, height };
 }
 
+function toVectorDatasetValue(vector: THREE.Vector3): string {
+  return `${vector.x.toFixed(4)},${vector.y.toFixed(4)},${vector.z.toFixed(4)}`;
+}
+
 export function createThreeSceneRuntime(container: HTMLElement): SceneRuntime {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color("#f2f6fb");
 
   const { width, height } = resolveViewportSize(container);
   const camera = new THREE.PerspectiveCamera(CAMERA_FOV, width / height, CAMERA_NEAR, CAMERA_FAR);
-  camera.position.set(6, 5, 8);
-  camera.lookAt(0, 0, 0);
+  camera.position.copy(DEFAULT_CAMERA_POSITION);
+  camera.lookAt(DEFAULT_CAMERA_TARGET);
 
   const renderer = new THREE.WebGLRenderer({
     antialias: true,
@@ -64,10 +74,80 @@ export function createThreeSceneRuntime(container: HTMLElement): SceneRuntime {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(width, height, false);
   renderer.domElement.className = "center-render-canvas-element";
-  renderer.domElement.setAttribute("aria-label", "3D scene canvas");
+  renderer.domElement.tabIndex = 0;
+  renderer.domElement.setAttribute(
+    "aria-label",
+    "3D scene canvas. Mouse: orbit, pan, zoom. Keyboard: arrows pan, plus/minus zoom, R reset.",
+  );
   renderer.domElement.setAttribute("data-testid", "center-render-canvas-element");
 
   container.replaceChildren(renderer.domElement);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enablePan = true;
+  controls.enableZoom = true;
+  controls.enableRotate = true;
+  controls.enableDamping = false;
+  controls.target.copy(DEFAULT_CAMERA_TARGET);
+  controls.keys = {
+    LEFT: "ArrowLeft",
+    UP: "ArrowUp",
+    RIGHT: "ArrowRight",
+    BOTTOM: "ArrowDown",
+  };
+  controls.mouseButtons = {
+    LEFT: THREE.MOUSE.ROTATE,
+    MIDDLE: THREE.MOUSE.DOLLY,
+    RIGHT: THREE.MOUSE.PAN,
+  };
+  controls.update();
+  controls.saveState();
+
+  const syncCameraDiagnostics = (): void => {
+    renderer.domElement.dataset.cameraPosition = toVectorDatasetValue(camera.position);
+    renderer.domElement.dataset.cameraTarget = toVectorDatasetValue(controls.target);
+  };
+
+  const resetCamera = (): void => {
+    controls.reset();
+    controls.update();
+    syncCameraDiagnostics();
+  };
+
+  const onCanvasPointerDown = (): void => {
+    renderer.domElement.focus({ preventScroll: true });
+  };
+
+  const onCanvasKeyDown = (event: KeyboardEvent): void => {
+    switch (event.code) {
+      case "KeyR": {
+        event.preventDefault();
+        resetCamera();
+        break;
+      }
+      case "Equal":
+      case "NumpadAdd": {
+        event.preventDefault();
+        controls.dollyIn(KEYBOARD_ZOOM_FACTOR);
+        controls.update();
+        syncCameraDiagnostics();
+        break;
+      }
+      case "Minus":
+      case "NumpadSubtract": {
+        event.preventDefault();
+        controls.dollyOut(KEYBOARD_ZOOM_FACTOR);
+        controls.update();
+        syncCameraDiagnostics();
+        break;
+      }
+      default:
+        break;
+    }
+  };
+
+  renderer.domElement.addEventListener("pointerdown", onCanvasPointerDown);
+  renderer.domElement.addEventListener("keydown", onCanvasKeyDown);
 
   const ambientLight = new THREE.AmbientLight("#edf4ff", 0.65);
   const keyLight = new THREE.DirectionalLight("#ffffff", 1.1);
@@ -126,6 +206,9 @@ export function createThreeSceneRuntime(container: HTMLElement): SceneRuntime {
     atomMesh.rotation.x += 0.0025;
     bondMesh.rotation.y -= 0.0045;
 
+    controls.update();
+    syncCameraDiagnostics();
+
     renderer.render(scene, camera);
     animationFrameHandle = window.requestAnimationFrame(renderFrame);
   };
@@ -144,8 +227,12 @@ export function createThreeSceneRuntime(container: HTMLElement): SceneRuntime {
         window.addEventListener("resize", onWindowResize);
       }
 
+      controls.listenToKeyEvents(renderer.domElement);
+      renderer.domElement.focus({ preventScroll: true });
+      syncCameraDiagnostics();
       renderFrame();
     },
+    resetCamera,
     dispose: () => {
       if (disposed) {
         return;
@@ -164,9 +251,15 @@ export function createThreeSceneRuntime(container: HTMLElement): SceneRuntime {
         window.removeEventListener("resize", onWindowResize);
       }
 
+      controls.stopListenToKeyEvents();
+      controls.dispose();
+      renderer.domElement.removeEventListener("pointerdown", onCanvasPointerDown);
+      renderer.domElement.removeEventListener("keydown", onCanvasKeyDown);
+
       scene.traverse((object) => {
         disposeObjectResources(object);
       });
+
       renderer.dispose();
       renderer.forceContextLoss();
       container.replaceChildren();

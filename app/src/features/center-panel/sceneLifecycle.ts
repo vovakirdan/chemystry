@@ -1,6 +1,7 @@
 export type SceneRuntime = {
   start: () => void;
   dispose: () => void;
+  resetCamera?: () => void;
 };
 
 export type SceneRuntimeFactory = (container: HTMLElement) => SceneRuntime;

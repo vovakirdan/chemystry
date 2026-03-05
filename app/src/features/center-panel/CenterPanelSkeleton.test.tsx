@@ -11,6 +11,8 @@ describe("CenterPanelSkeleton lifecycle sync", () => {
     expect(html).toContain('data-testid="center-render-canvas"');
     expect(html).toContain('data-testid="center-render-canvas-host"');
     expect(html).toContain("Grid + XYZ axes");
+    expect(html).toContain("Mouse orbit/pan/zoom + keyboard control");
+    expect(html).toContain('data-testid="center-render-reset-camera"');
     expect(html).not.toContain("3D scene canvas will render here.");
     expect(html).toContain('data-testid="center-control-play" disabled=""');
     expect(html).toContain('data-testid="center-control-pause"');
