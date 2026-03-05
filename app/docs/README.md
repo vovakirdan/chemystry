@@ -23,6 +23,7 @@
 - Reaction yield and percent yield (E08-T02): `calculation-engine-e08-t02.md`
 - Concentrations and gas calculations with T/P (E08-T03): `calculation-engine-e08-t03.md`
 - UI/storage/export integration (E08-T04): `calculation-engine-e08-t04.md`
+- 3D scene bootstrap in center panel (E09-T01): `3d-scene-bootstrap-e09-t01.md`
 - Schema dump (E04-T02): `schema-dump-e04-t02.sql`
 - Schema dump (E04-T03): `schema-dump-e04-t03.sql`
 - Storage JSON fields (E04-T03): `storage-json-fields-e04-t03.md`

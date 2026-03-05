@@ -8,6 +8,10 @@ describe("CenterPanelSkeleton lifecycle sync", () => {
       <CenterPanelSkeleton controlState={{ isPlaying: true, timelinePosition: 64 }} />,
     );
 
+    expect(html).toContain('data-testid="center-render-canvas"');
+    expect(html).toContain('data-testid="center-render-canvas-host"');
+    expect(html).toContain("Grid + XYZ axes");
+    expect(html).not.toContain("3D scene canvas will render here.");
     expect(html).toContain('data-testid="center-control-play" disabled=""');
     expect(html).toContain('data-testid="center-control-pause"');
     expect(html).not.toContain('data-testid="center-control-pause" disabled=""');

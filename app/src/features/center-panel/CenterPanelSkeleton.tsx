@@ -1,4 +1,5 @@
 import { type ReactNode } from "react";
+import SceneViewport from "./SceneViewport";
 
 type CenterPanelSkeletonProps = {
   children?: ReactNode;
@@ -97,18 +98,11 @@ function CenterPanelSkeleton({
         <header className="center-render-header">
           <h2 className="panel-title">3D Renderer</h2>
           <p className="panel-description">
-            Placeholder boundary for viewport, camera overlays, and object interaction layers.
+            Workspace viewport with baseline lighting, orientation markers, and scene animation.
           </p>
         </header>
 
-        <div
-          className="center-render-canvas-placeholder"
-          role="img"
-          aria-label="3D viewport placeholder"
-          data-testid="center-render-canvas"
-        >
-          <p className="center-render-hint">3D scene canvas will render here.</p>
-        </div>
+        <SceneViewport />
       </section>
 
       <section
