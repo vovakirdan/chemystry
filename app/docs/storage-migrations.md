@@ -27,7 +27,7 @@
 
 ## Repository API (E04-T04)
 
-Repository entry point: `src-tauri/src/adapters/storage/repository.rs` (`StorageRepository`).
+Repository entry point: `src-tauri/src/adapters/storage/repository/mod.rs` with supporting `repository/*` modules (`StorageRepository`).
 
 Critical entity CRUD covered:
 

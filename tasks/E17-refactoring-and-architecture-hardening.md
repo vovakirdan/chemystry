@@ -120,7 +120,7 @@
 
 **Приоритет:** P0 (critical).
 
-**Статус:** planned.
+**Статус:** done.
 
 **Проблема/Контекст:** `repository.rs` перегружен CRUD-операциями, парсингом JSON payload, seeding baseline-данных, файловыми операциями и тестами (~3100 строк). Высокий риск скрытых side-effects при правках хранения данных.
 
@@ -132,14 +132,15 @@
    - `app/src-tauri/src/adapters/storage/repository/substances.rs`
    - `app/src-tauri/src/adapters/storage/repository/presets.rs`
    - `app/src-tauri/src/adapters/storage/repository/scenarios.rs`
-   - `app/src-tauri/src/adapters/storage/repository/seed.rs`
+   - `app/src-tauri/src/adapters/storage/repository/seed.rs` или `seed/`-подмодули, если baseline-константы/seed-upsert не помещаются в hard limit
    - `app/src-tauri/src/adapters/storage/repository/parsers.rs`
    - `app/src-tauri/src/adapters/storage/repository/file_ops.rs`
    - `app/src-tauri/src/adapters/storage/repository/sqlite_helpers.rs`
-   - `app/src-tauri/src/adapters/storage/repository/tests.rs`
+   - `app/src-tauri/src/adapters/storage/repository/tests.rs` или `tests/`-подмодули, если полный набор репозиторных тестов не помещается в hard limit
 3. Зафиксировать транзакционные границы и не менять SQL-модели/миграции в рамках этой задачи.
 4. Добавить `Intent:`-комментарии для нетривиального JSON parsing и атомарной замены файла БД.
 5. Проверить, что публичный API `StorageRepository` остался обратно совместимым для IPC-слоя.
+6. Для каждого нового `*.rs` файла зафиксировать `wc -l`; файлы выше soft limit допустимы только как переходный шаг внутри задачи, итоговое состояние обязано укладываться в hard limit без ADR.
 
 **Технические ограничения:**
 
@@ -153,6 +154,7 @@
 - Unit: тесты для `parsers.rs`, `sqlite_helpers.rs`, `file_ops.rs`.
 - Integration: существующие репозиторные тесты на CRUD/seed/import сценарии.
 - E2E: прогон smoke-цепочки сохранения/загрузки сценария через UI при изменении контрактной поверхности.
+- Review gate: сверка `public fn` API `StorageRepository` до/после split и проверка `rg -n "Intent:"` по новым модулям.
 - **Обязательный non-regression gate:** `cargo fmt --manifest-path app/src-tauri/Cargo.toml -- --check` + `cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings` + `cargo test --manifest-path app/src-tauri/Cargo.toml`.
 
 **Критерии приемки:**
@@ -161,7 +163,8 @@
 2. API `StorageRepository` и поведение транзакций/ошибок не изменены.
 3. Критичные парсеры и file operations имеют явные `Intent:`-комментарии.
 4. Нет новых модулей выше hard limit без ADR.
-5. Non-regression gate проходит полностью.
+5. `wc -l` по новым модулям зафиксирован и соответствует правилам проекта.
+6. Non-regression gate проходит полностью.
 
 **Артефакты результата (пути файлов/директорий):**
 
